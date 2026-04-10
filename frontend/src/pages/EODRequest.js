@@ -5,7 +5,7 @@ import { Calendar as CalendarIcon, FileUp, Send, CheckCircle, XCircle } from 'lu
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-export default function NonWorkingDay({ user }) {
+export default function EODRequest({ user }) {
   const [selectedDate, setSelectedDate] = useState('');
   const [reason, setReason] = useState('');
   const [file, setFile] = useState(null);
@@ -61,8 +61,8 @@ export default function NonWorkingDay({ user }) {
     <div className="max-w-3xl mx-auto space-y-6">
       {/* Page Header */}
       <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl p-6 shadow-lg">
-        <h2 className="text-2xl font-bold mb-2">Non-Working Day Request</h2>
-        <p className="text-purple-100">Submit a request for non-working days</p>
+        <h2 className="text-2xl font-bold mb-2">EOD Request</h2>
+        <p className="text-purple-100">Submit a request for EOD reports</p>
       </div>
 
       {/* Success Message */}

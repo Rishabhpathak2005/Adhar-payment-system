@@ -77,6 +77,7 @@ class ReportSummary(BaseModel):
     user_id: str
     date: str  # DD/MM/YYYY format
     report_date: str  # Report period date
+    report_type: str = "ECMP"  # ECMP or UC
     
     # Operator details
     operator_id: str = ""
@@ -100,6 +101,9 @@ class ReportSummary(BaseModel):
     
     # Details
     records: List[Dict[str, Any]] = []
+    
+    # Serial number validation (for ECMP)
+    serial_validation: Dict[str, Any] = {}
     
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "uploaded"
@@ -172,7 +176,73 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 # ==================== HTML PARSING UTILITIES ====================
 
-def parse_html_report(html_content: str) -> ReportSummary:
+def validate_serial_numbers(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate serial numbers in ECMP reports (bottom to top should be ascending)"""
+    validation = {
+        "is_valid": True,
+        "errors": [],
+        "warnings": [],
+        "serial_numbers": []
+    }
+    
+    if not records:
+        return validation
+    
+    serial_numbers = []
+    
+    # Extract serial numbers from enrolment numbers
+    for idx, record in enumerate(records):
+        enrolment_no = record.get('enrolment_no', '')
+        if len(enrolment_no) >= 15:
+            # Format: 0847 (4) + 00708 (5) + 00158 (5) + datetime
+            # Serial number is at position 9-13 (5 digits)
+            try:
+                serial_str = enrolment_no[9:14]
+                serial_num = int(serial_str)
+                serial_numbers.append({
+                    'index': idx + 1,
+                    'serial': serial_num,
+                    'enrolment_no': enrolment_no
+                })
+            except (ValueError, IndexError):
+                validation['warnings'].append(f"Row {idx + 1}: Could not extract serial number")
+    
+    validation['serial_numbers'] = serial_numbers
+    
+    if len(serial_numbers) < 2:
+        return validation
+    
+    # Check if serial numbers are in descending order (top to bottom)
+    # Which means ascending from bottom to top
+    for i in range(len(serial_numbers) - 1):
+        current = serial_numbers[i]['serial']
+        next_serial = serial_numbers[i + 1]['serial']
+        
+        # Should be descending (current > next)
+        if current <= next_serial:
+            validation['is_valid'] = False
+            validation['errors'].append(
+                f"Serial number order issue at row {serial_numbers[i]['index']}: "
+                f"{current} should be greater than {next_serial}"
+            )
+        
+        # Check for gaps (should be sequential)
+        if current - next_serial != 1:
+            validation['warnings'].append(
+                f"Gap in serial numbers between row {serial_numbers[i]['index']} "
+                f"({current}) and row {serial_numbers[i + 1]['index']} ({next_serial})"
+            )
+    
+    # Check for duplicates
+    serials_list = [s['serial'] for s in serial_numbers]
+    duplicates = [s for s in set(serials_list) if serials_list.count(s) > 1]
+    if duplicates:
+        validation['is_valid'] = False
+        validation['errors'].append(f"Duplicate serial numbers found: {duplicates}")
+    
+    return validation
+
+def parse_html_report(html_content: str, report_type: str = "ECMP") -> Dict[str, Any]:
     """Parse HTML report and extract data"""
     soup = BeautifulSoup(html_content, 'html.parser')
     
@@ -192,8 +262,12 @@ def parse_html_report(html_content: str) -> ReportSummary:
         "demographic_update_amount": 0.0,
         "biometric_update_amount": 0.0,
         "total_amount": 0.0,
-        "records": []
+        "records": [],
+        "serial_validation": {}
     }
+    
+    # Determine enrollment type identifier based on report type
+    enrollment_type = "E" if report_type == "ECMP" else "N"
     
     # Extract operator details from first_view table
     first_view = soup.find('div', class_='first_view')
@@ -253,8 +327,8 @@ def parse_html_report(html_content: str) -> ReportSummary:
                         mandatory_bio = record['mandatory_bio'].lower()
                         amount = record['total_amount']
                         
-                        if record_type == 'E':
-                            # New Enrollment
+                        if record_type == enrollment_type:
+                            # New Enrollment (E for ECMP, N for UC)
                             summary['new_enrollment_count'] += 1
                             summary['new_enrollment_amount'] += amount
                         elif record_type == 'U':
@@ -279,6 +353,10 @@ def parse_html_report(html_content: str) -> ReportSummary:
         summary['demographic_update_amount'] +
         summary['biometric_update_amount']
     )
+    
+    # Validate serial numbers for ECMP reports
+    if report_type == "ECMP":
+        summary['serial_validation'] = validate_serial_numbers(summary['records'])
     
     return summary
 
@@ -350,11 +428,15 @@ async def get_me(current_user: User = Depends(get_current_user)):
 @api_router.post("/reports/upload")
 async def upload_report(
     file: UploadFile = File(...),
+    report_type: str = Form("ECMP"),  # ECMP or UC
     current_user: User = Depends(get_current_user)
 ):
     """Upload and process ZIP report file"""
     if not file.filename.endswith('.zip'):
         raise HTTPException(status_code=400, detail="Only ZIP files are allowed")
+    
+    if report_type not in ["ECMP", "UC"]:
+        raise HTTPException(status_code=400, detail="Report type must be ECMP or UC")
     
     try:
         # Read ZIP file
@@ -385,13 +467,14 @@ async def upload_report(
             with open(html_path, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             
-            # Parse report
-            parsed_data = parse_html_report(html_content)
+            # Parse report with report type
+            parsed_data = parse_html_report(html_content, report_type)
             
             # Create report document
             report = ReportSummary(
                 user_id=current_user.id,
                 date=datetime.now(timezone.utc).strftime("%d/%m/%Y"),
+                report_type=report_type,
                 **parsed_data
             )
             
@@ -403,7 +486,7 @@ async def upload_report(
             
             return {
                 "success": True,
-                "message": "Report uploaded and processed successfully",
+                "message": f"{report_type} report uploaded and processed successfully",
                 "report": report
             }
     

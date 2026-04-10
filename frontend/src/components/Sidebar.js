@@ -3,8 +3,8 @@ import { Home, Calendar, AlertCircle, Wallet, LogOut, User, ChevronLeft, Chevron
 
 export default function Sidebar({ user, onLogout, isOpen, setIsOpen }) {
   const navItems = [
-    { to: '/working-day', icon: Home, label: 'Working Day', badge: null },
-    { to: '/non-working-day', icon: Calendar, label: 'Non-Working Day', badge: null },
+    { to: '/home', icon: Home, label: 'HOME', badge: null },
+    { to: '/eod-request', icon: Calendar, label: 'EOD Request', badge: null },
     { to: '/missing-eod', icon: AlertCircle, label: 'Missing EOD', badge: null },
     { to: '/wallet', icon: Wallet, label: 'Wallet', badge: null },
   ];

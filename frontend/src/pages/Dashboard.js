@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
-import WorkingDay from './WorkingDay';
-import NonWorkingDay from './NonWorkingDay';
+import Home from './Home';
+import ECMPReport from './ECMPReport';
+import UCReport from './UCReport';
+import EODRequest from './EODRequest';
 import MissingEOD from './MissingEOD';
 import Wallet from './Wallet';
 
@@ -42,9 +44,11 @@ export default function Dashboard({ user, onLogout }) {
         {/* Page Content */}
         <main className="flex-1 overflow-y-auto p-6">
           <Routes>
-            <Route path="/" element={<Navigate to="/working-day" replace />} />
-            <Route path="/working-day" element={<WorkingDay user={user} />} />
-            <Route path="/non-working-day" element={<NonWorkingDay user={user} />} />
+            <Route path="/" element={<Navigate to="/home" replace />} />
+            <Route path="/home" element={<Home user={user} />} />
+            <Route path="/ecmp-report" element={<ECMPReport user={user} />} />
+            <Route path="/uc-report" element={<UCReport user={user} />} />
+            <Route path="/eod-request" element={<EODRequest user={user} />} />
             <Route path="/missing-eod" element={<MissingEOD user={user} />} />
             <Route path="/wallet" element={<Wallet user={user} />} />
           </Routes>
