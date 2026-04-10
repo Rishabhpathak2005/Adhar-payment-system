@@ -495,11 +495,12 @@ async def upload_report(
                         }
                     )
             
-            # Check if report for this date already exists and is paid
+            # Check if report for this date AND type already exists and is paid
             report_date = parsed_data.get('report_date', '')
             existing_paid_report = await db.reports.find_one({
                 "user_id": current_user.id,
                 "report_date": report_date,
+                "report_type": report_type,  # Check type also
                 "payment_status": "paid"
             })
             
@@ -581,18 +582,21 @@ async def get_report_by_date(date: str, current_user: User = Depends(get_current
 
 @api_router.get("/missing-eod")
 async def get_missing_eod(current_user: User = Depends(get_current_user)):
-    """Get list of dates with missing EOD reports"""
+    """Get list of dates with missing EOD reports (separate for ECMP and UC)"""
     # Get all reports for user
     reports = await db.reports.find(
         {"user_id": current_user.id},
-        {"_id": 0, "report_date": 1}
+        {"_id": 0, "report_date": 1, "report_type": 1}
     ).to_list(1000)
     
-    uploaded_dates = {report['report_date'] for report in reports}
+    # Separate by type
+    ecmp_dates = {report['report_date'] for report in reports if report.get('report_type') == 'ECMP'}
+    uc_dates = {report['report_date'] for report in reports if report.get('report_type') == 'UC'}
     
     # Generate list of expected dates (last 30 days for example)
     from datetime import timedelta
-    missing_dates = []
+    missing_ecmp = []
+    missing_uc = []
     today = datetime.now(timezone.utc)
     
     for i in range(30):
@@ -600,13 +604,26 @@ async def get_missing_eod(current_user: User = Depends(get_current_user)):
         date_str = check_date.strftime("%d/%m/%Y")
         
         # Skip Sundays (weekday 6)
-        if check_date.weekday() != 6 and date_str not in uploaded_dates:
-            missing_dates.append({
-                "date": date_str,
-                "status": "NOT-Uploaded"
-            })
+        if check_date.weekday() != 6:
+            if date_str not in ecmp_dates:
+                missing_ecmp.append({
+                    "date": date_str,
+                    "type": "ECMP",
+                    "status": "NOT-Uploaded"
+                })
+            
+            if date_str not in uc_dates:
+                missing_uc.append({
+                    "date": date_str,
+                    "type": "UC",
+                    "status": "NOT-Uploaded"
+                })
     
-    return missing_dates
+    return {
+        "ecmp": missing_ecmp,
+        "uc": missing_uc,
+        "total_missing": len(missing_ecmp) + len(missing_uc)
+    }
 
 @api_router.post("/reports/{report_id}/payment")
 async def make_report_payment(

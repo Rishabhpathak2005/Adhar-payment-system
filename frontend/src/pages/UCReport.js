@@ -409,7 +409,7 @@ export default function UCReport({ user }) {
                 </div>
               </div>
               
-              {result.payment_status !== 'paid' && result.total_amount > 0 && (
+              {result.payment_status !== 'paid' && (
                 <button
                   onClick={handleMakePayment}
                   disabled={paymentProcessing}
@@ -436,12 +436,6 @@ export default function UCReport({ user }) {
                 </div>
               )}
             </div>
-
-            {result.total_amount === 0 && (
-              <div className="mt-4 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg text-sm">
-                No payment required for this report.
-              </div>
-            )}
           </div>
 
           {/* Payment Success Message */}

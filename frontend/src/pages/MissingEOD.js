@@ -6,7 +6,7 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 export default function MissingEOD({ user }) {
-  const [missingDates, setMissingDates] = useState([]);
+  const [missingData, setMissingData] = useState({ ecmp: [], uc: [], total_missing: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -22,7 +22,7 @@ export default function MissingEOD({ user }) {
         }
       });
       
-      setMissingDates(response.data);
+      setMissingData(response.data);
     } catch (err) {
       setError(err.response?.data?.detail || 'Error fetching missing EOD reports');
     } finally {
@@ -76,7 +76,11 @@ export default function MissingEOD({ user }) {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600">Total Missing Reports</p>
-                <p className="text-3xl font-bold text-red-600 mt-1">{missingDates.length}</p>
+                <p className="text-3xl font-bold text-red-600 mt-1">{missingData.total_missing}</p>
+                <div className="mt-2 flex gap-4 text-sm">
+                  <span className="text-blue-600 font-medium">ECMP: {missingData.ecmp.length}</span>
+                  <span className="text-purple-600 font-medium">UC: {missingData.uc.length}</span>
+                </div>
               </div>
               <div className="bg-red-100 p-4 rounded-full">
                 <AlertCircle className="w-8 h-8 text-red-600" />
@@ -84,18 +88,21 @@ export default function MissingEOD({ user }) {
             </div>
           </div>
 
-          {/* Missing Dates Table */}
+          {/* ECMP Missing Reports */}
           <div className="bg-white rounded-xl shadow-md overflow-hidden">
-            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-              <h3 className="text-lg font-semibold text-gray-900">Missing Report Dates</h3>
-              <p className="text-sm text-gray-600 mt-1">Reports that have not been uploaded</p>
+            <div className="px-6 py-4 bg-blue-50 border-b border-blue-200">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <span className="bg-blue-600 text-white px-3 py-1 rounded-md text-sm">ECMP</span>
+                Missing Reports
+              </h3>
+              <p className="text-sm text-gray-600 mt-1">ECMP reports that have not been uploaded ({missingData.ecmp.length})</p>
             </div>
 
-            {missingDates.length === 0 ? (
+            {missingData.ecmp.length === 0 ? (
               <div className="p-12 text-center">
                 <Calendar className="w-16 h-16 text-green-500 mx-auto mb-4" />
-                <p className="text-lg font-semibold text-gray-900 mb-2">All Caught Up!</p>
-                <p className="text-gray-600">No missing EOD reports found</p>
+                <p className="text-lg font-semibold text-gray-900 mb-2">All ECMP Reports Uploaded!</p>
+                <p className="text-gray-600">No missing ECMP EOD reports found</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -109,12 +116,15 @@ export default function MissingEOD({ user }) {
                         Date
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                        Report Status
+                        Type
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Status
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {missingDates.map((item, index) => (
+                    {missingData.ecmp.map((item, index) => (
                       <tr key={index} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {index + 1}
@@ -124,6 +134,77 @@ export default function MissingEOD({ user }) {
                             <Calendar className="w-4 h-4 text-gray-400" />
                             <span className="text-sm font-medium text-gray-900">{item.date}</span>
                           </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            ECMP
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                            <AlertCircle className="w-3 h-3 mr-1" />
+                            {item.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* UC Missing Reports */}
+          <div className="bg-white rounded-xl shadow-md overflow-hidden">
+            <div className="px-6 py-4 bg-purple-50 border-b border-purple-200">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <span className="bg-purple-600 text-white px-3 py-1 rounded-md text-sm">UC</span>
+                Missing Reports
+              </h3>
+              <p className="text-sm text-gray-600 mt-1">UC reports that have not been uploaded ({missingData.uc.length})</p>
+            </div>
+
+            {missingData.uc.length === 0 ? (
+              <div className="p-12 text-center">
+                <Calendar className="w-16 h-16 text-green-500 mx-auto mb-4" />
+                <p className="text-lg font-semibold text-gray-900 mb-2">All UC Reports Uploaded!</p>
+                <p className="text-gray-600">No missing UC EOD reports found</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        S.No
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Date
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Type
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {missingData.uc.map((item, index) => (
+                      <tr key={index} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {index + 1}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-gray-400" />
+                            <span className="text-sm font-medium text-gray-900">{item.date}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                            UC
+                          </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
@@ -140,7 +221,7 @@ export default function MissingEOD({ user }) {
           </div>
 
           {/* Info Box */}
-          {missingDates.length > 0 && (
+          {missingData.total_missing > 0 && (
             <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-6 py-4 rounded-xl">
               <p className="text-sm">
                 <strong>Action Required:</strong> Please upload the missing EOD reports as soon as possible. Go to the Working Day page to upload your reports.
