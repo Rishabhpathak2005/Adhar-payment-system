@@ -136,6 +136,10 @@ class NonWorkingDayRequest(BaseModel):
     status: str = "pending"  # pending, approved, rejected
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+class AddFundsRequest(BaseModel):
+    amount: float
+    transaction_id: str = ""
+
 # ==================== AUTH UTILITIES ====================
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -603,12 +607,18 @@ async def get_wallet_history(current_user: User = Depends(get_current_user)):
     return transactions
 
 @api_router.post("/wallet/generate-qr")
-async def generate_payment_qr(amount: float, current_user: User = Depends(get_current_user)):
+async def generate_payment_qr(
+    amount: float,
+    current_user: User = Depends(get_current_user)
+):
     """Generate UPI QR code for payment"""
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+    
     UPI_ID = "7368087310@ybl"
     
     # Create UPI payment string
-    upi_string = f"upi://pay?pa={UPI_ID}&pn=UIDAI Staff&am={amount}&cu=INR"
+    upi_string = f"upi://pay?pa={UPI_ID}&pn=UIDAI%20Staff&am={amount}&cu=INR"
     
     # Generate QR code
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
@@ -630,11 +640,16 @@ async def generate_payment_qr(amount: float, current_user: User = Depends(get_cu
 
 @api_router.post("/wallet/add-funds")
 async def add_funds(
-    amount: float,
-    transaction_id: str = "",
+    request: AddFundsRequest,
     current_user: User = Depends(get_current_user)
 ):
     """Add funds to wallet (manual verification for now)"""
+    amount = request.amount
+    transaction_id = request.transaction_id
+    
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+    
     # Get current wallet
     wallet = await db.wallets.find_one({"user_id": current_user.id})
     

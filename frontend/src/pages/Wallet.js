@@ -55,12 +55,11 @@ export default function Wallet({ user }) {
     try {
       const token = localStorage.getItem('token');
       const response = await axios.post(
-        `${API}/wallet/generate-qr`,
-        parseFloat(loadAmount),
+        `${API}/wallet/generate-qr?amount=${parseFloat(loadAmount)}`,
+        {},
         {
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
+            'Authorization': `Bearer ${token}`
           }
         }
       );
