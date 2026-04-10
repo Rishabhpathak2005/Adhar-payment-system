@@ -495,24 +495,52 @@ async def upload_report(
                         }
                     )
             
+            # Check if report for this date already exists and is paid
+            report_date = parsed_data.get('report_date', '')
+            existing_paid_report = await db.reports.find_one({
+                "user_id": current_user.id,
+                "report_date": report_date,
+                "payment_status": "paid"
+            })
+            
+            payment_status = "pending"
+            payment_id = None
+            paid_at = None
+            
+            if existing_paid_report:
+                # Mark this report as already paid (using previous payment)
+                payment_status = "paid"
+                payment_id = existing_paid_report.get('payment_id')
+                paid_at = existing_paid_report.get('paid_at')
+            
             # Create report document
             report = ReportSummary(
                 user_id=current_user.id,
                 date=datetime.now(timezone.utc).strftime("%d/%m/%Y"),
                 report_type=report_type,
+                payment_status=payment_status,
+                payment_id=payment_id,
+                paid_at=datetime.fromisoformat(paid_at) if paid_at else None,
                 **parsed_data
             )
             
             # Save to database
             report_doc = report.model_dump()
             report_doc['uploaded_at'] = report_doc['uploaded_at'].isoformat()
+            if report_doc.get('paid_at'):
+                report_doc['paid_at'] = report_doc['paid_at'].isoformat()
             
             await db.reports.insert_one(report_doc)
             
+            message = f"{report_type} report uploaded and processed successfully"
+            if payment_status == "paid":
+                message += " (Payment already completed for this date)"
+            
             return {
                 "success": True,
-                "message": f"{report_type} report uploaded and processed successfully",
-                "report": report
+                "message": message,
+                "report": report,
+                "already_paid": payment_status == "paid"
             }
     
     except HTTPException:

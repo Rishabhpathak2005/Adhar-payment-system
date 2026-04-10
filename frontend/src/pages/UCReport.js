@@ -268,6 +268,11 @@ export default function UCReport({ user }) {
             <div>
               <p className="font-semibold">UC Report Uploaded Successfully!</p>
               <p className="text-sm">Date: {result.report_date}</p>
+              {result.payment_status === 'paid' && (
+                <p className="text-sm font-medium text-green-700 mt-1">
+                  ℹ️ Payment already completed for this date
+                </p>
+              )}
             </div>
           </div>
 
