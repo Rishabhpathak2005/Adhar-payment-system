@@ -11,6 +11,7 @@ export default function ECMPReport({ user }) {
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [validationErrors, setValidationErrors] = useState([]);
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -57,7 +58,16 @@ export default function ECMPReport({ user }) {
       const fileInput = document.getElementById('file-input');
       if (fileInput) fileInput.value = '';
     } catch (err) {
-      setError(err.response?.data?.detail || 'Error uploading report. Please try again.');
+      // Check if it's a serial validation error
+      if (err.response?.data?.detail?.errors) {
+        setValidationErrors(err.response.data.detail.errors);
+        setError('Serial number validation failed. Report rejected.');
+      } else if (typeof err.response?.data?.detail === 'object') {
+        setError(err.response.data.detail.message || 'Error uploading report.');
+        setValidationErrors(err.response.data.detail.errors || []);
+      } else {
+        setError(err.response?.data?.detail || 'Error uploading report. Please try again.');
+      }
     } finally {
       setUploading(false);
       setTimeout(() => setProcessing(false), 1000);
@@ -145,9 +155,29 @@ export default function ECMPReport({ user }) {
 
         {/* Error Message */}
         {error && (
-          <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
-            <XCircle className="w-5 h-5" />
-            {error}
+          <div className="mt-4 bg-red-50 border-2 border-red-300 text-red-800 px-6 py-4 rounded-lg">
+            <div className="flex items-start gap-3">
+              <XCircle className="w-6 h-6 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold text-lg mb-2">{error}</p>
+                {validationErrors.length > 0 && (
+                  <div className="mt-3 bg-red-100 border border-red-200 rounded-lg p-4">
+                    <p className="font-medium mb-2">Serial Number Issues:</p>
+                    <ul className="space-y-1 text-sm">
+                      {validationErrors.map((err, idx) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-red-600 font-bold">•</span>
+                          <span>{err}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="mt-3 text-sm font-medium text-red-600">
+                  ⚠️ Please fix the serial number issues and upload again.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 

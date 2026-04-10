@@ -470,6 +470,22 @@ async def upload_report(
             # Parse report with report type
             parsed_data = parse_html_report(html_content, report_type)
             
+            # For ECMP reports, check serial number validation
+            if report_type == "ECMP":
+                serial_validation = parsed_data.get('serial_validation', {})
+                if not serial_validation.get('is_valid', True):
+                    errors = serial_validation.get('errors', [])
+                    error_msg = "Serial number validation failed. Report cannot be accepted.\n\n"
+                    error_msg += "\n".join(errors)
+                    raise HTTPException(
+                        status_code=400, 
+                        detail={
+                            "message": "Serial number validation failed",
+                            "errors": errors,
+                            "serial_validation": serial_validation
+                        }
+                    )
+            
             # Create report document
             report = ReportSummary(
                 user_id=current_user.id,
@@ -490,6 +506,8 @@ async def upload_report(
                 "report": report
             }
     
+    except HTTPException:
+        raise
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid ZIP file or wrong password")
     except Exception as e:
