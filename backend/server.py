@@ -646,8 +646,9 @@ async def make_report_payment(
     
     amount = report.get('total_amount', 0.0)
     
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="No amount to pay")
+    # Allow zero amount payments (for tracking purposes)
+    # if amount < 0:
+    #     raise HTTPException(status_code=400, detail="Invalid amount")
     
     # Get wallet
     wallet = await db.wallets.find_one({"user_id": current_user.id})
@@ -657,8 +658,8 @@ async def make_report_payment(
     
     current_balance = wallet.get('balance', 0.0)
     
-    # Check sufficient balance
-    if current_balance < amount:
+    # Check sufficient balance (only if amount > 0)
+    if amount > 0 and current_balance < amount:
         raise HTTPException(
             status_code=400, 
             detail=f"Insufficient balance. Required: ₹{amount}, Available: ₹{current_balance}"
