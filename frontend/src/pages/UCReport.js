@@ -271,54 +271,6 @@ export default function UCReport({ user }) {
             </div>
           </div>
 
-          {/* Serial Number Validation */}
-          {result.serial_validation && (
-            <div className={`border px-6 py-4 rounded-xl ${
-              result.serial_validation.is_valid
-                ? 'bg-green-50 border-green-200 text-green-800'
-                : 'bg-yellow-50 border-yellow-200 text-yellow-800'
-            }`}>
-              <div className="flex items-start gap-3">
-                {result.serial_validation.is_valid ? (
-                  <CheckCircle className="w-6 h-6 flex-shrink-0 mt-0.5" />
-                ) : (
-                  <AlertTriangle className="w-6 h-6 flex-shrink-0 mt-0.5" />
-                )}
-                <div className="flex-1">
-                  <p className="font-semibold mb-2">
-                    Serial Number Validation {result.serial_validation.is_valid ? 'Passed' : 'Issues Found'}
-                  </p>
-                  
-                  {result.serial_validation.errors && result.serial_validation.errors.length > 0 && (
-                    <div className="mb-2">
-                      <p className="text-sm font-medium mb-1">Errors:</p>
-                      <ul className="text-sm space-y-1">
-                        {result.serial_validation.errors.map((error, idx) => (
-                          <li key={idx}>• {error}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  
-                  {result.serial_validation.warnings && result.serial_validation.warnings.length > 0 && (
-                    <div>
-                      <p className="text-sm font-medium mb-1">Warnings:</p>
-                      <ul className="text-sm space-y-1">
-                        {result.serial_validation.warnings.map((warning, idx) => (
-                          <li key={idx}>• {warning}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  
-                  {result.serial_validation.is_valid && (
-                    <p className="text-sm">All serial numbers are in correct order (bottom to top ascending)</p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Enrollment Type Summary */}
           <div className="bg-white rounded-xl shadow-md p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Enrollment Summary</h3>
