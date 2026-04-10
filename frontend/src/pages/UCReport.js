@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
-import { Upload, FileArchive, Loader, CheckCircle, XCircle, FileText, AlertTriangle } from 'lucide-react';
+import { Upload, FileArchive, Loader, CheckCircle, XCircle, FileText, AlertTriangle, CreditCard, Wallet } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -11,6 +11,9 @@ export default function UCReport({ user }) {
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [validationErrors, setValidationErrors] = useState([]);
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -57,7 +60,16 @@ export default function UCReport({ user }) {
       const fileInput = document.getElementById('file-input');
       if (fileInput) fileInput.value = '';
     } catch (err) {
-      setError(err.response?.data?.detail || 'Error uploading report. Please try again.');
+      // Check if it's a serial validation error
+      if (err.response?.data?.detail?.errors) {
+        setValidationErrors(err.response.data.detail.errors);
+        setError('Serial number validation failed. Report rejected.');
+      } else if (typeof err.response?.data?.detail === 'object') {
+        setError(err.response.data.detail.message || 'Error uploading report.');
+        setValidationErrors(err.response.data.detail.errors || []);
+      } else {
+        setError(err.response?.data?.detail || 'Error uploading report. Please try again.');
+      }
     } finally {
       setUploading(false);
       setTimeout(() => setProcessing(false), 1000);
@@ -78,6 +90,49 @@ export default function UCReport({ user }) {
 
   const handleDragOver = (e) => {
     e.preventDefault();
+  };
+
+  const handleMakePayment = async () => {
+    if (!result || !result.id) {
+      setError('No report to pay for');
+      return;
+    }
+
+    if (result.payment_status === 'paid') {
+      setError('Report already paid');
+      return;
+    }
+
+    setPaymentProcessing(true);
+    setError('');
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.post(
+        `${API}/reports/${result.id}/payment`,
+        {},
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        }
+      );
+
+      // Update result with payment info
+      setResult({
+        ...result,
+        payment_status: 'paid',
+        payment_id: response.data.payment_id,
+        paid_at: new Date().toISOString()
+      });
+      
+      setPaymentSuccess(true);
+      setTimeout(() => setPaymentSuccess(false), 5000);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Error processing payment. Please try again.');
+    } finally {
+      setPaymentProcessing(false);
+    }
   };
 
   return (
@@ -145,9 +200,29 @@ export default function UCReport({ user }) {
 
         {/* Error Message */}
         {error && (
-          <div className="mt-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-center gap-2">
-            <XCircle className="w-5 h-5" />
-            {error}
+          <div className="mt-4 bg-red-50 border-2 border-red-300 text-red-800 px-6 py-4 rounded-lg">
+            <div className="flex items-start gap-3">
+              <XCircle className="w-6 h-6 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-semibold text-lg mb-2">{error}</p>
+                {validationErrors.length > 0 && (
+                  <div className="mt-3 bg-red-100 border border-red-200 rounded-lg p-4">
+                    <p className="font-medium mb-2">Serial Number Issues:</p>
+                    <ul className="space-y-1 text-sm">
+                      {validationErrors.map((err, idx) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-red-600 font-bold">•</span>
+                          <span>{err}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="mt-3 text-sm font-medium text-red-600">
+                  ⚠️ Please fix the serial number issues and upload again.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -350,6 +425,75 @@ export default function UCReport({ user }) {
                   <span className="text-gray-600">Station ID:</span>
                   <span className="ml-2 font-medium text-gray-900">{result.station_id}</span>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Payment Section */}
+          <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                  <Wallet className="w-6 h-6 text-green-600" />
+                  Payment
+                </h3>
+                <div className="space-y-1">
+                  <p className="text-lg font-semibold text-green-700">
+                    Total Amount: ₹{result.total_amount.toFixed(2)}
+                  </p>
+                  <p className="text-sm text-gray-600">
+                    Status: {' '}
+                    <span className={`font-semibold ${
+                      result.payment_status === 'paid' ? 'text-green-600' : 'text-orange-600'
+                    }`}>
+                      {result.payment_status === 'paid' ? '✓ Paid' : 'Pending Payment'}
+                    </span>
+                  </p>
+                </div>
+              </div>
+              
+              {result.payment_status !== 'paid' && result.total_amount > 0 && (
+                <button
+                  onClick={handleMakePayment}
+                  disabled={paymentProcessing}
+                  className="bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-8 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg"
+                >
+                  {paymentProcessing ? (
+                    <>
+                      <Loader className="w-5 h-5 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <CreditCard className="w-5 h-5" />
+                      Make Payment
+                    </>
+                  )}
+                </button>
+              )}
+
+              {result.payment_status === 'paid' && (
+                <div className="bg-green-100 border border-green-300 text-green-800 px-6 py-3 rounded-lg flex items-center gap-2">
+                  <CheckCircle className="w-5 h-5" />
+                  <span className="font-semibold">Payment Completed</span>
+                </div>
+              )}
+            </div>
+
+            {result.total_amount === 0 && (
+              <div className="mt-4 bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg text-sm">
+                No payment required for this report.
+              </div>
+            )}
+          </div>
+
+          {/* Payment Success Message */}
+          {paymentSuccess && (
+            <div className="bg-green-50 border-2 border-green-300 text-green-800 px-6 py-4 rounded-xl flex items-center gap-3 animate-fade-in">
+              <CheckCircle className="w-7 h-7" />
+              <div>
+                <p className="font-bold text-lg">Payment Successful!</p>
+                <p className="text-sm">Amount ₹{result.total_amount.toFixed(2)} has been deducted from your wallet.</p>
               </div>
             </div>
           )}

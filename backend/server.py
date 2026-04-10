@@ -105,6 +105,11 @@ class ReportSummary(BaseModel):
     # Serial number validation (for ECMP)
     serial_validation: Dict[str, Any] = {}
     
+    # Payment
+    payment_status: str = "pending"  # pending, paid, failed
+    payment_id: Optional[str] = None
+    paid_at: Optional[datetime] = None
+    
     uploaded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "uploaded"
 
@@ -574,6 +579,91 @@ async def get_missing_eod(current_user: User = Depends(get_current_user)):
             })
     
     return missing_dates
+
+@api_router.post("/reports/{report_id}/payment")
+async def make_report_payment(
+    report_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Process payment for a report from wallet"""
+    # Get report
+    report = await db.reports.find_one(
+        {"id": report_id, "user_id": current_user.id},
+        {"_id": 0}
+    )
+    
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    # Check if already paid
+    if report.get('payment_status') == 'paid':
+        raise HTTPException(status_code=400, detail="Report already paid")
+    
+    amount = report.get('total_amount', 0.0)
+    
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="No amount to pay")
+    
+    # Get wallet
+    wallet = await db.wallets.find_one({"user_id": current_user.id})
+    
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    
+    current_balance = wallet.get('balance', 0.0)
+    
+    # Check sufficient balance
+    if current_balance < amount:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Insufficient balance. Required: ₹{amount}, Available: ₹{current_balance}"
+        )
+    
+    # Deduct from wallet
+    new_balance = current_balance - amount
+    
+    await db.wallets.update_one(
+        {"user_id": current_user.id},
+        {"$set": {
+            "balance": new_balance,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Create debit transaction
+    payment_id = str(uuid.uuid4())
+    transaction = WalletTransaction(
+        user_id=current_user.id,
+        type="debit",
+        amount=amount,
+        description=f"Payment for {report.get('report_type', 'EOD')} report - {report.get('report_date', '')}",
+        balance_after=new_balance,
+        status="completed"
+    )
+    
+    txn_doc = transaction.model_dump()
+    txn_doc['created_at'] = txn_doc['created_at'].isoformat()
+    await db.wallet_transactions.insert_one(txn_doc)
+    
+    # Update report payment status
+    paid_at = datetime.now(timezone.utc)
+    await db.reports.update_one(
+        {"id": report_id},
+        {"$set": {
+            "payment_status": "paid",
+            "payment_id": payment_id,
+            "paid_at": paid_at.isoformat()
+        }}
+    )
+    
+    return {
+        "success": True,
+        "message": "Payment successful",
+        "amount": amount,
+        "new_balance": new_balance,
+        "payment_id": payment_id,
+        "transaction": transaction
+    }
 
 # ==================== WALLET ROUTES ====================
 
