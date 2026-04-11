@@ -5,6 +5,8 @@ import { Calendar as CalendarIcon, FileUp, Send, CheckCircle, XCircle } from 'lu
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+const BYTES_TO_KB = 1024; // Convert bytes to kilobytes
+
 export default function EODRequest({ user }) {
   const [selectedDate, setSelectedDate] = useState('');
   const [reason, setReason] = useState('');
@@ -136,7 +138,7 @@ export default function EODRequest({ user }) {
                   <FileUp className="w-8 h-8 mx-auto mb-2" />
                   <p className="font-medium">{file.name}</p>
                   <p className="text-sm text-gray-500 mt-1">
-                    {(file.size / 1024).toFixed(2)} KB
+                    {(file.size / BYTES_TO_KB).toFixed(2)} KB
                   </p>
                 </div>
               ) : (

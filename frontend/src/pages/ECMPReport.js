@@ -4,6 +4,7 @@ import { Upload, FileArchive, Loader, CheckCircle, XCircle, FileText, AlertTrian
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
+const BYTES_TO_KB = 1024; // Convert bytes to kilobytes
 
 export default function ECMPReport({ user }) {
   const [file, setFile] = useState(null);
@@ -181,7 +182,7 @@ export default function ECMPReport({ user }) {
               <div>
                 <p className="font-medium text-gray-900">{file.name}</p>
                 <p className="text-sm text-gray-500">
-                  {(file.size / 1024).toFixed(2)} KB
+                  {(file.size / BYTES_TO_KB).toFixed(2)} KB
                 </p>
               </div>
             </div>
@@ -209,8 +210,8 @@ export default function ECMPReport({ user }) {
                   <div className="mt-3 bg-red-100 border border-red-200 rounded-lg p-4">
                     <p className="font-medium mb-2">Serial Number Issues:</p>
                     <ul className="space-y-1 text-sm">
-                      {validationErrors.map((err, idx) => (
-                        <li key={idx} className="flex items-start gap-2">
+                      {validationErrors.map((err) => (
+                        <li key={err} className="flex items-start gap-2">
                           <span className="text-red-600 font-bold">•</span>
                           <span>{err}</span>
                         </li>

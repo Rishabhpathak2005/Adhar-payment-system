@@ -19,9 +19,11 @@ function App() {
       setUser(JSON.parse(userData));
     }
     setLoading(false);
-  }, []);
+  }, []);  // Empty dependency array is intentional - only check on mount
 
   const handleLogin = (token, userData) => {
+    // TODO: Security - Move to httpOnly cookies in production
+    // localStorage is vulnerable to XSS attacks
     localStorage.setItem('token', token);
     localStorage.setItem('user', JSON.stringify(userData));
     setIsAuthenticated(true);
@@ -29,6 +31,7 @@ function App() {
   };
 
   const handleLogout = () => {
+    // Clear authentication data
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     setIsAuthenticated(false);

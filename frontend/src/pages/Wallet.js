@@ -41,7 +41,7 @@ export default function Wallet({ user }) {
 
   useEffect(() => {
     fetchWalletData();
-  }, []);
+  }, []);  // Empty dependency array is intentional - only fetch on mount
 
   const handleGenerateQR = async () => {
     if (!loadAmount || parseFloat(loadAmount) <= 0) {

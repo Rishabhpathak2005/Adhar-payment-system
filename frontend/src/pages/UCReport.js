@@ -5,6 +5,8 @@ import { Upload, FileArchive, Loader, CheckCircle, XCircle, FileText, AlertTrian
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+const BYTES_TO_KB = 1024; // Convert bytes to kilobytes
+
 export default function UCReport({ user }) {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -181,7 +183,7 @@ export default function UCReport({ user }) {
               <div>
                 <p className="font-medium text-gray-900">{file.name}</p>
                 <p className="text-sm text-gray-500">
-                  {(file.size / 1024).toFixed(2)} KB
+                  {(file.size / BYTES_TO_KB).toFixed(2)} KB
                 </p>
               </div>
             </div>

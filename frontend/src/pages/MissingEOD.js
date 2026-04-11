@@ -32,7 +32,7 @@ export default function MissingEOD({ user }) {
 
   useEffect(() => {
     fetchMissingEOD();
-  }, []);
+  }, []);  // Empty dependency array is intentional - only fetch on mount
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -125,7 +125,7 @@ export default function MissingEOD({ user }) {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {missingData.ecmp.map((item, index) => (
-                      <tr key={index} className="hover:bg-gray-50 transition-colors">
+                      <tr key={`ecmp-${item.date}`} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {index + 1}
                         </td>
@@ -191,7 +191,7 @@ export default function MissingEOD({ user }) {
                   </thead>
                   <tbody className="divide-y divide-gray-200">
                     {missingData.uc.map((item, index) => (
-                      <tr key={index} className="hover:bg-gray-50 transition-colors">
+                      <tr key={`uc-${item.date}`} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {index + 1}
                         </td>
