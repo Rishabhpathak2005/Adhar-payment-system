@@ -1,5 +1,5 @@
-flask
+fastapi
+uvicorn
 gunicorn
-flask_sqlalchemy
-requests
 python-dotenv
+requests
