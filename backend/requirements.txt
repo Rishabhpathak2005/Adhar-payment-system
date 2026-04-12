@@ -7,3 +7,4 @@ motor
 passlib[bcrypt]
 python-jose[cryptography]
 beautifulsoup4
+qrcode[pil]
