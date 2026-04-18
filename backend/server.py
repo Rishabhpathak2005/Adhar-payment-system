@@ -146,12 +146,11 @@ class AddFundsRequest(BaseModel):
     transaction_id: str = ""
 
 # ==================== AUTH UTILITIES ====================
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return plain_password == hashed_password
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return password
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
