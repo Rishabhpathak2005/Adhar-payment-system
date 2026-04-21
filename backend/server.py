@@ -18,6 +18,8 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 import qrcode
 import base64
+from flask import Flask
+from flask_cors import CORS
 CORS(app, resources={
     r"/*": {"origins": "https://uidai-mks-admin.onrender.com"}
 })
