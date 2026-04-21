@@ -18,7 +18,9 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 import qrcode
 import base64
-
+CORS(app, resources={
+    r"/*": {"origins": "https://uidai-mks-admin.onrender.com"}
+})
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
