@@ -17,55 +17,6 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 import qrcode
 import base64
-# ==================== ADMIN USER CRUD ====================
-
-@api_router.get("/admin/users")
-async def get_all_users(current_user: User = Depends(get_current_user)):
-    users = await db.users.find({}, {"_id": 0}).to_list(1000)
-    return users
-
-
-@api_router.post("/admin/users")
-async def create_user(user_data: UserCreate, current_user: User = Depends(get_current_user)):
-    existing = await db.users.find_one({"staff_id": user_data.staff_id})
-    if existing:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-    user = User(
-        staff_id=user_data.staff_id,
-        name=user_data.name,
-        email=user_data.email
-    )
-
-    user_doc = user.model_dump()
-    user_doc["created_at"] = user_doc["created_at"].isoformat()
-    user_doc["hashed_password"] = user_data.password
-
-    await db.users.insert_one(user_doc)
-
-    return {"success": True, "user": user}
-
-
-@api_router.put("/admin/users/{user_id}")
-async def update_user(
-    user_id: str,
-    data: dict,
-    current_user: User = Depends(get_current_user)
-):
-    await db.users.update_one(
-        {"id": user_id},
-        {"$set": data}
-    )
-    return {"success": True}
-
-
-@api_router.delete("/admin/users/{user_id}")
-async def delete_user(
-    user_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    await db.users.delete_one({"id": user_id})
-    return {"success": True}
 # ==================== BASIC SETUP ====================
 
 ROOT_DIR = Path(__file__).parent
