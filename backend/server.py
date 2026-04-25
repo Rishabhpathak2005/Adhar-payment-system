@@ -98,7 +98,7 @@ cors_origins = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS",
-        "https://uidai-mks-admin.onrender.com,http://localhost:3000"
+        "https://uidai-mks-admin.onrender.com,
     ).split(",")
     if origin.strip()
 ]
@@ -434,7 +434,136 @@ def parse_html_report(html_content: str, report_type: str = "ECMP") -> Dict[str,
 
     return summary
 
+# ==================== ADMIN USER CRUD ROUTES ====================
 
+def require_admin(current_user: User):
+    admin_ids = os.getenv("ADMIN_STAFF_IDS", "JEPC_MKS_GAR_NS900297").split(",")
+
+    if current_user.staff_id not in [x.strip() for x in admin_ids]:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+class AdminUserUpdate(BaseModel):
+    staff_id: Optional[str] = None
+    name: Optional[str] = None
+    password: Optional[str] = None
+    email: Optional[EmailStr] = None
+    is_active: Optional[bool] = None
+
+
+@api_router.get("/admin/users")
+async def admin_get_users(current_user: User = Depends(get_current_user)):
+    require_admin(current_user)
+
+    users = await db.users.find({}, {"_id": 0, "hashed_password": 0}).sort("created_at", -1).to_list(1000)
+    return users
+
+
+@api_router.post("/admin/users")
+async def admin_create_user(
+    user_data: UserCreate,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    existing = await db.users.find_one({"staff_id": user_data.staff_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Staff ID already exists")
+
+    user = User(
+        staff_id=user_data.staff_id,
+        name=user_data.name,
+        email=user_data.email,
+        is_active=True
+    )
+
+    user_doc = user.model_dump()
+    user_doc["created_at"] = user_doc["created_at"].isoformat()
+    user_doc["hashed_password"] = get_password_hash(user_data.password)
+
+    await db.users.insert_one(user_doc)
+
+    wallet = Wallet(user_id=user.id)
+    wallet_doc = wallet.model_dump()
+    wallet_doc["updated_at"] = wallet_doc["updated_at"].isoformat()
+    await db.wallets.insert_one(wallet_doc)
+
+    return {
+        "success": True,
+        "message": "User created successfully",
+        "user": user
+    }
+
+
+@api_router.put("/admin/users/{user_id}")
+async def admin_update_user(
+    user_id: str,
+    data: AdminUserUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    update_data = data.model_dump(exclude_none=True)
+
+    if "staff_id" in update_data:
+        existing = await db.users.find_one({
+            "staff_id": update_data["staff_id"],
+            "id": {"$ne": user_id}
+        })
+        if existing:
+            raise HTTPException(status_code=400, detail="Staff ID already used by another user")
+
+    if "password" in update_data:
+        update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data to update")
+
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": update_data}
+    )
+
+    updated_user = await db.users.find_one(
+        {"id": user_id},
+        {"_id": 0, "hashed_password": 0}
+    )
+
+    return {
+        "success": True,
+        "message": "User updated successfully",
+        "user": updated_user
+    }
+
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(
+    user_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await db.users.delete_one({"id": user_id})
+    await db.wallets.delete_many({"user_id": user_id})
+    await db.wallet_transactions.delete_many({"user_id": user_id})
+    await db.reports.delete_many({"user_id": user_id})
+    await db.requests.delete_many({"user_id": user_id})
+
+    return {
+        "success": True,
+        "message": "User deleted successfully"
+    }
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register", response_model=User)
