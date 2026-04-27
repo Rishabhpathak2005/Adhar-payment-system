@@ -56,10 +56,11 @@ cors_origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["https://uidai-mks-admin.onrender.com", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
 )
 
 # MongoDB connection
@@ -387,13 +388,53 @@ def parse_html_report(html_content: str, report_type: str = "ECMP") -> Dict[str,
 
 # ==================== ADMIN USER CRUD ROUTES ====================
 
-def require_admin(current_user: User):
-    admin_ids = os.getenv("ADMIN_STAFF_IDS", "JEPC_MKS_GAR_NS900297").split(",")
+ADMIN_ID = "admin123"
+ADMIN_PASSWORD = "1234"
 
-    if current_user.staff_id not in [x.strip() for x in admin_ids]:
+@api_router.post("/admin/login")
+async def admin_login(user_data: UserLogin):
+    if user_data.staff_id != ADMIN_ID or user_data.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin ID or password")
+
+    existing = await db.users.find_one({"staff_id": ADMIN_ID}, {"_id": 0})
+
+    if not existing:
+        user = User(
+            staff_id=ADMIN_ID,
+            name="Super Admin",
+            email="admin@test.com",
+            is_active=True
+        )
+
+        user_doc = user.model_dump()
+        user_doc["created_at"] = user_doc["created_at"].isoformat()
+        user_doc["hashed_password"] = ADMIN_PASSWORD
+
+        await db.users.insert_one(user_doc)
+        existing = user_doc
+
+        wallet = Wallet(user_id=user.id)
+        wallet_doc = wallet.model_dump()
+        wallet_doc["updated_at"] = wallet_doc["updated_at"].isoformat()
+        await db.wallets.insert_one(wallet_doc)
+
+    access_token = create_access_token(data={"sub": existing["id"]})
+
+    if isinstance(existing.get("created_at"), str):
+        existing["created_at"] = datetime.fromisoformat(existing["created_at"])
+
+    existing.pop("hashed_password", None)
+    user = User(**existing)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user
+    }
+    
+   def require_admin(current_user: User):
+    if current_user.staff_id != "admin123":
         raise HTTPException(status_code=403, detail="Admin access required")
-
-
 class AdminUserUpdate(BaseModel):
     staff_id: Optional[str] = None
     name: Optional[str] = None
