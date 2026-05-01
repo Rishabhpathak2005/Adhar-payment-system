@@ -49,7 +49,7 @@ cors_origins = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS",
-        "https://uidai-mks-admin.onrender.com,http://localhost:3000",https://uidai-mks-gov-in.onrender.com
+        "https://uidai-mks-admin.onrender.com,http://localhost:3000,https://uidai-mks-gov-in.onrender.com"
     ).split(",")
     if origin.strip()
 ]
