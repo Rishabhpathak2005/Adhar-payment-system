@@ -61,7 +61,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-)
 
 # MongoDB connection
 client = AsyncIOMotorClient(MONGO_URL)
