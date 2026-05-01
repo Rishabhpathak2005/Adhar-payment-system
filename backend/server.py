@@ -45,23 +45,18 @@ app = FastAPI(title="UIDAI Staff Management System")
 api_router = APIRouter(prefix="/api")
 
 # CORS
-cors_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "CORS_ORIGINS",
-        "https://uidai-mks-admin.onrender.com,http://localhost:3000,https://uidai-mks-gov-in.onrender.com"
-    ).split(",")
-    if origin.strip()
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://uidai-mks-admin.onrender.com", "http://localhost:3000"],
+    allow_origins=[
+        "https://uidai-mks-admin.onrender.com",
+        "https://uidai-mks-gov-in.onrender.com",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # MongoDB connection
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
