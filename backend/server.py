@@ -895,7 +895,7 @@ async def generate_payment_qr(
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Amount must be greater than 0")
 
-    upi_id = "7368087310@ybl"
+    upi_id = "MAB.037135027651329@AXISBANK"
     upi_string = f"upi://pay?pa={upi_id}&pn=UIDAI%20Staff&am={amount}&cu=INR"
 
     qr = qrcode.QRCode(version=1, box_size=10, border=5)
