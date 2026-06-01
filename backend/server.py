@@ -910,7 +910,7 @@ async def generate_payment_qr(
 
     return {
         "qr_code": f"data:image/png;base64,{img_str}",
-        "upi_id": 7368087310@ybl,
+        "upi_id": upi_id,
         "amount": amount
     }
 
