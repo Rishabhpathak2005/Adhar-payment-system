@@ -72,6 +72,7 @@ class User(BaseModel):
     staff_id: str
     name: str
     email: Optional[EmailStr] = None
+    joining_date: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
 
@@ -433,6 +434,7 @@ class AdminUserUpdate(BaseModel):
     name: Optional[str] = None
     password: Optional[str] = None
     email: Optional[EmailStr] = None
+    joining_date: Optional[str] = None
     is_active: Optional[bool] = None
 
 
