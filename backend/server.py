@@ -532,7 +532,7 @@ async def admin_delete_user(
     user_id: str,
     current_user: User = Depends(get_current_user)
 ):
- require_admin(current_user)
+    require_admin(current_user)
 
     if current_user.id == user_id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
@@ -550,7 +550,10 @@ async def admin_delete_user(
     return {
         "success": True,
         "message": "User deleted successfully"
-    } @api_router.get("/admin/dashboard-stats")
+    }
+    
+    
+    @api_router.get("/admin/dashboard-stats")
 async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     require_admin(current_user)
 
