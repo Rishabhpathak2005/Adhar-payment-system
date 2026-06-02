@@ -565,7 +565,7 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
         "staff_id": {"$ne": "admin123"},
         "is_active": True
     })
-        all_users = await db.users.find(
+    all_users = await db.users.find(
         {"staff_id": {"$ne": "admin123"}, "is_active": True},
         {"_id": 0, "id": 1, "joining_date": 1}
     ).to_list(5000)
