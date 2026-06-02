@@ -532,7 +532,25 @@ async def admin_delete_user(
     user_id: str,
     current_user: User = Depends(get_current_user)
 ):
- @api_router.get("/admin/dashboard-stats")
+ require_admin(current_user)
+
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    await db.users.delete_one({"id": user_id})
+    await db.wallets.delete_many({"user_id": user_id})
+    await db.wallet_transactions.delete_many({"user_id": user_id})
+    await db.reports.delete_many({"user_id": user_id})
+    await db.requests.delete_many({"user_id": user_id})
+
+    return {
+        "success": True,
+        "message": "User deleted successfully"
+    } @api_router.get("/admin/dashboard-stats")
 async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     require_admin(current_user)
 
@@ -577,26 +595,7 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
         "eod_not_uploaded": 0,
         "last_day_collection": last_day_collection,
         "last_week_collection": last_week_collection,
-        "last_month_collection": last_month_collection,
-    }   require_admin(current_user)
-
-    if current_user.id == user_id:
-        raise HTTPException(status_code=400, detail="You cannot delete your own account")
-
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    await db.users.delete_one({"id": user_id})
-    await db.wallets.delete_many({"user_id": user_id})
-    await db.wallet_transactions.delete_many({"user_id": user_id})
-    await db.reports.delete_many({"user_id": user_id})
-    await db.requests.delete_many({"user_id": user_id})
-
-    return {
-        "success": True,
-        "message": "User deleted successfully"
-    }
+        "last_month_collection": last_month_collection,}
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register", response_model=User)
