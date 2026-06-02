@@ -552,19 +552,17 @@ async def admin_delete_user(
         "message": "User deleted successfully"
     }
     
-    
-@api_router.get("/admin/dashboard-stats")
+    @api_router.get("/admin/dashboard-stats")
 async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     require_admin(current_user)
 
-    total_staff = await db.users.count_documents({
-        "staff_id": {"$ne": "admin123"}
-    })
+    total_staff = await db.users.count_documents({"staff_id": {"$ne": "admin123"}})
 
     active_staff = await db.users.count_documents({
         "staff_id": {"$ne": "admin123"},
         "is_active": True
     })
+
     all_users = await db.users.find(
         {"staff_id": {"$ne": "admin123"}, "is_active": True},
         {"_id": 0, "id": 1, "joining_date": 1}
@@ -594,7 +592,7 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
         if report_type in ["ECMP", "UC"] and report_date:
             reports_by_user[user_id][report_type].add(report_date)
 
-    "Pending_eod_Report": eod_not_uploaded,
+    eod_not_uploaded = 0
     today_date = datetime.now(timezone.utc).replace(tzinfo=None)
 
     for staff in all_users:
@@ -619,46 +617,27 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
             uploaded_ecmp = date_str in reports_by_user.get(staff["id"], {}).get("ECMP", set())
             uploaded_uc = date_str in reports_by_user.get(staff["id"], {}).get("UC", set())
 
-                if not uploaded_ecmp:
-                    eod_not_uploaded += 1
+            if not uploaded_ecmp:
+                eod_not_uploaded += 1
 
-                if not uploaded_uc:
-                    eod_not_uploaded += 1
+            if not uploaded_uc:
+                eod_not_uploaded += 1
 
             check_date += timedelta(days=1)
-    today = datetime.now(timezone.utc)
-    yesterday = today - timedelta(days=1)
-    last_week = today - timedelta(days=7)
-    last_month = today - timedelta(days=30)
-
-    all_reports = await db.reports.find({}, {"_id": 0}).to_list(5000)
-
-    def parse_uploaded_at(report):
-        uploaded_at = report.get("uploaded_at")
-        if isinstance(uploaded_at, str):
-            return datetime.fromisoformat(uploaded_at)
-        return uploaded_at
-
-    last_day_collection = 0
-    last_week_collection = 0
-    last_month_collection = 0
-
-    for report in all_reports:
-        uploaded_at = parse_uploaded_at(report)
-        amount = float(report.get("total_amount", 0) or 0)
-
-        if uploaded_at:
-            if uploaded_at >= yesterday:
-                last_day_collection += amount
-            if uploaded_at >= last_week:
-                last_week_collection += amount
-            if uploaded_at >= last_month:
-                last_month_collection += amount
 
     return {
         "total_staff": total_staff,
         "active_staff": active_staff,
-        "Pending_eod_Report": Pending_eod_Report,
+        "eod_not_uploaded": eod_not_uploaded,
+        "last_day_collection": 0,
+        "last_week_collection": 0,
+        "last_month_collection": 0
+    }
+
+    return {
+        "total_staff": total_staff,
+        "active_staff": active_staff,
+        "Pending_eod_Report": eod_not_uploaded ,
         "last_day_collection": last_day_collection,
         "last_week_collection": last_week_collection,
         "last_month_collection": last_month_collection,}
