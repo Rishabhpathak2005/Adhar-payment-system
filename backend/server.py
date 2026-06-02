@@ -658,7 +658,7 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     return {
         "total_staff": total_staff,
         "active_staff": active_staff,
-        "eod_not_uploaded": 0,
+        "Pending_eod_Report": Pending_eod_Report,
         "last_day_collection": last_day_collection,
         "last_week_collection": last_week_collection,
         "last_month_collection": last_month_collection,}
