@@ -553,7 +553,8 @@ async def admin_delete_user(
     }
     
 @api_router.get("/admin/dashboard-stats")
-async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
+async def admin_dashboard_stats(
+    current_user: User = Depends(get_current_user)):
     require_admin(current_user)
 
     total_staff = await db.users.count_documents({"staff_id": {"$ne": "admin123"}})
