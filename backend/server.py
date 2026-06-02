@@ -82,6 +82,7 @@ class UserCreate(BaseModel):
     name: str
     password: str
     email: Optional[EmailStr] = None
+    joining_date: Optional[str] = None
 
 
 class UserLogin(BaseModel):
@@ -461,6 +462,7 @@ async def admin_create_user(
         staff_id=user_data.staff_id,
         name=user_data.name,
         email=user_data.email,
+        joining_date=user_data.joining_date,
         is_active=True
     )
 
@@ -553,32 +555,57 @@ async def admin_delete_user(
     }
     
 @api_router.get("/admin/dashboard-stats")
-async def admin_dashboard_stats(
-    current_user: User = Depends(get_current_user)):
+async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     require_admin(current_user)
 
-    total_staff = await db.users.count_documents({"staff_id": {"$ne": "admin123"}})
+    total_staff = await db.users.count_documents({
+        "staff_id": {"$ne": "admin123"}
+    })
 
     active_staff = await db.users.count_documents({
         "staff_id": {"$ne": "admin123"},
         "is_active": True
     })
 
+    def parse_date_safe(date_value):
+        if not date_value:
+            return None
+
+        if isinstance(date_value, datetime):
+            return date_value.replace(tzinfo=None)
+
+        date_text = str(date_value).strip()
+
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(date_text, fmt)
+            except ValueError:
+                pass
+
+        try:
+            return datetime.fromisoformat(date_text).replace(tzinfo=None)
+        except ValueError:
+            return None
+
+    # ===== EOD NOT UPLOADED: all active staff, joining date se today tak, koi day skip nahi =====
     all_users = await db.users.find(
         {"staff_id": {"$ne": "admin123"}, "is_active": True},
         {"_id": 0, "id": 1, "joining_date": 1}
     ).to_list(5000)
 
-    all_reports = await db.reports.find(
+    all_report_dates = await db.reports.find(
         {},
         {"_id": 0, "user_id": 1, "report_date": 1, "report_type": 1}
     ).to_list(10000)
 
     reports_by_user = {}
 
-    for report in all_reports:
+    for report in all_report_dates:
         user_id = report.get("user_id")
-        if not user_id:
+        report_type = report.get("report_type")
+        report_date = report.get("report_date")
+
+        if not user_id or report_type not in ["ECMP", "UC"] or not report_date:
             continue
 
         if user_id not in reports_by_user:
@@ -587,32 +614,25 @@ async def admin_dashboard_stats(
                 "UC": set()
             }
 
-        report_type = report.get("report_type")
-        report_date = report.get("report_date")
+        parsed_report_date = parse_date_safe(report_date)
+        if not parsed_report_date:
+            continue
 
-        if report_type in ["ECMP", "UC"] and report_date:
-            reports_by_user[user_id][report_type].add(report_date)
+        date_str = parsed_report_date.strftime("%d/%m/%Y")
+        reports_by_user[user_id][report_type].add(date_str)
 
     eod_not_uploaded = 0
     today_date = datetime.now(timezone.utc).replace(tzinfo=None)
 
     for staff in all_users:
-        joining_date = staff.get("joining_date")
+        start_date = parse_date_safe(staff.get("joining_date"))
 
-        if not joining_date:
+        if not start_date:
             continue
-
-        try:
-            start_date = datetime.strptime(joining_date, "%Y-%m-%d")
-        except ValueError:
-            try:
-                start_date = datetime.strptime(joining_date, "%d/%m/%Y")
-            except ValueError:
-                continue
 
         check_date = start_date
 
-        while check_date <= today_date:
+        while check_date.date() <= today_date.date():
             date_str = check_date.strftime("%d/%m/%Y")
 
             uploaded_ecmp = date_str in reports_by_user.get(staff["id"], {}).get("ECMP", set())
@@ -626,22 +646,47 @@ async def admin_dashboard_stats(
 
             check_date += timedelta(days=1)
 
-    return {
-        "total_staff": total_staff,
-        "active_staff": active_staff,
-        "eod_not_uploaded": eod_not_uploaded,
-        "last_day_collection": 0,
-        "last_week_collection": 0,
-        "last_month_collection": 0
-    }
+    # ===== COLLECTION: report_date ke basis par total_amount ka sum =====
+    all_reports = await db.reports.find(
+        {},
+        {"_id": 0, "report_date": 1, "total_amount": 1}
+    ).to_list(10000)
+
+    last_day_collection = 0.0
+    last_week_collection = 0.0
+    last_month_collection = 0.0
+
+    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    week_start = today - timedelta(days=6)
+    month_start = today - timedelta(days=29)
+
+    for report in all_reports:
+        report_date = parse_date_safe(report.get("report_date"))
+        if not report_date:
+            continue
+
+        amount = float(report.get("total_amount", 0) or 0)
+        report_day = report_date.date()
+
+        if report_day == today:
+            last_day_collection += amount
+
+        if week_start <= report_day <= today:
+            last_week_collection += amount
+
+        if month_start <= report_day <= today:
+            last_month_collection += amount
 
     return {
         "total_staff": total_staff,
         "active_staff": active_staff,
-        "Pending_eod_Report": eod_not_uploaded ,
-        "last_day_collection": last_day_collection,
-        "last_week_collection": last_week_collection,
-        "last_month_collection": last_month_collection,}
+        "eod_not_uploaded": eod_not_uploaded,
+        "last_day_collection": round(last_day_collection, 2),
+        "last_week_collection": round(last_week_collection, 2),
+        "last_month_collection": round(last_month_collection, 2)
+    }
+
+
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register", response_model=User)
@@ -880,21 +925,19 @@ async def get_missing_eod(current_user: User = Depends(get_current_user)):
     while check_date <= today:
         date_str = check_date.strftime("%d/%m/%Y")
 
-        # Sunday ignore
-        if check_date.weekday() != 6:
-            if date_str not in ecmp_dates:
-                missing_ecmp.append({
-                    "date": date_str,
-                    "type": "ECMP",
-                    "status": "NOT-Uploaded"
-                })
+        if date_str not in ecmp_dates:
+            missing_ecmp.append({
+                "date": date_str,
+                "type": "ECMP",
+                "status": "NOT-Uploaded"
+            })
 
-            if date_str not in uc_dates:
-                missing_uc.append({
-                    "date": date_str,
-                    "type": "UC",
-                    "status": "NOT-Uploaded"
-                })
+        if date_str not in uc_dates:
+            missing_uc.append({
+                "date": date_str,
+                "type": "UC",
+                "status": "NOT-Uploaded"
+            })
 
         check_date = check_date + timedelta(days=1)
 
