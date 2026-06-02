@@ -565,6 +565,67 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
         "staff_id": {"$ne": "admin123"},
         "is_active": True
     })
+        all_users = await db.users.find(
+        {"staff_id": {"$ne": "admin123"}, "is_active": True},
+        {"_id": 0, "id": 1, "joining_date": 1}
+    ).to_list(5000)
+
+    all_reports = await db.reports.find(
+        {},
+        {"_id": 0, "user_id": 1, "report_date": 1, "report_type": 1}
+    ).to_list(10000)
+
+    reports_by_user = {}
+
+    for report in all_reports:
+        user_id = report.get("user_id")
+        if not user_id:
+            continue
+
+        if user_id not in reports_by_user:
+            reports_by_user[user_id] = {
+                "ECMP": set(),
+                "UC": set()
+            }
+
+        report_type = report.get("report_type")
+        report_date = report.get("report_date")
+
+        if report_type in ["ECMP", "UC"] and report_date:
+            reports_by_user[user_id][report_type].add(report_date)
+
+    "Pending_eod_Report": eod_not_uploaded,
+    today_date = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    for staff in all_users:
+        joining_date = staff.get("joining_date")
+
+        if not joining_date:
+            continue
+
+        try:
+            start_date = datetime.strptime(joining_date, "%Y-%m-%d")
+        except ValueError:
+            try:
+                start_date = datetime.strptime(joining_date, "%d/%m/%Y")
+            except ValueError:
+                continue
+
+        check_date = start_date
+
+        while check_date <= today_date:
+            date_str = check_date.strftime("%d/%m/%Y")
+
+            uploaded_ecmp = date_str in reports_by_user.get(staff["id"], {}).get("ECMP", set())
+            uploaded_uc = date_str in reports_by_user.get(staff["id"], {}).get("UC", set())
+
+                if not uploaded_ecmp:
+                    eod_not_uploaded += 1
+
+                if not uploaded_uc:
+                    eod_not_uploaded += 1
+
+            check_date += timedelta(days=1)
     today = datetime.now(timezone.utc)
     yesterday = today - timedelta(days=1)
     last_week = today - timedelta(days=7)
