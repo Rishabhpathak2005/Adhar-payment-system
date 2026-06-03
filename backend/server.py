@@ -72,6 +72,12 @@ class User(BaseModel):
     staff_id: str
     name: str
     email: Optional[EmailStr] = None
+    brc: Optional[str] = None
+    district: Optional[str] = None
+    mobile: Optional[str] = None
+    station_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    aadhaar: Optional[str] = None
     joining_date: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
@@ -82,6 +88,12 @@ class UserCreate(BaseModel):
     name: str
     password: str
     email: Optional[EmailStr] = None
+    brc: Optional[str] = None
+    district: Optional[str] = None
+    mobile: Optional[str] = None
+    station_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    aadhaar: Optional[str] = None
     joining_date: Optional[str] = None
 
 
@@ -166,6 +178,17 @@ class NonWorkingDayRequest(BaseModel):
 class AddFundsRequest(BaseModel):
     amount: float
     transaction_id: str = ""
+
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    brc: Optional[str] = None
+    district: Optional[str] = None
+    mobile: Optional[str] = None
+    station_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    aadhaar: Optional[str] = None
 
 
 # ==================== AUTH UTILITIES ====================
@@ -435,6 +458,12 @@ class AdminUserUpdate(BaseModel):
     name: Optional[str] = None
     password: Optional[str] = None
     email: Optional[EmailStr] = None
+    brc: Optional[str] = None
+    district: Optional[str] = None
+    mobile: Optional[str] = None
+    station_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    aadhaar: Optional[str] = None
     joining_date: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -462,6 +491,12 @@ async def admin_create_user(
         staff_id=user_data.staff_id,
         name=user_data.name,
         email=user_data.email,
+        brc=user_data.brc,
+        district=user_data.district,
+        mobile=user_data.mobile,
+        station_id=user_data.station_id,
+        operator_id=user_data.operator_id,
+        aadhaar=user_data.aadhaar,
         joining_date=user_data.joining_date,
         is_active=True
     )
@@ -699,7 +734,13 @@ async def register_user(user_data: UserCreate):
     user = User(
         staff_id=user_data.staff_id,
         name=user_data.name,
-        email=user_data.email
+        email=user_data.email,
+        brc=user_data.brc,
+        district=user_data.district,
+        mobile=user_data.mobile,
+        station_id=user_data.station_id,
+        operator_id=user_data.operator_id,
+        aadhaar=user_data.aadhaar
     )
 
     user_doc = user.model_dump()
@@ -742,6 +783,32 @@ async def login(user_data: UserLogin):
 @api_router.get("/auth/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@api_router.put("/profile", response_model=User)
+async def update_profile(
+    data: UserProfileUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    update_data = data.model_dump(exclude_none=True)
+
+    if not update_data:
+        return current_user
+
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": update_data}
+    )
+
+    updated_user = await db.users.find_one(
+        {"id": current_user.id},
+        {"_id": 0, "hashed_password": 0}
+    )
+
+    if isinstance(updated_user.get("created_at"), str):
+        updated_user["created_at"] = datetime.fromisoformat(updated_user["created_at"])
+
+    return User(**updated_user)
 
 
 # ==================== REPORT ROUTES ====================
