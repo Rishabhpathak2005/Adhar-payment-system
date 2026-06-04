@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Form, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -74,6 +74,11 @@ class User(BaseModel):
     email: Optional[EmailStr] = None
     brc: Optional[str] = None
     district: Optional[str] = None
+    mobile: Optional[str] = None
+    aadhaar: Optional[str] = None
+    station_id: Optional[str] = None
+    avatar: Optional[str] = None
+    profile_photo: Optional[str] = None
     joining_date: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
@@ -86,6 +91,11 @@ class UserCreate(BaseModel):
     email: Optional[EmailStr] = None
     brc: Optional[str] = None
     district: Optional[str] = None
+    mobile: Optional[str] = None
+    aadhaar: Optional[str] = None
+    station_id: Optional[str] = None
+    avatar: Optional[str] = None
+    profile_photo: Optional[str] = None
     joining_date: Optional[str] = None
 
 
@@ -441,6 +451,11 @@ class AdminUserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     brc: Optional[str] = None
     district: Optional[str] = None
+    mobile: Optional[str] = None
+    aadhaar: Optional[str] = None
+    station_id: Optional[str] = None
+    avatar: Optional[str] = None
+    profile_photo: Optional[str] = None
     joining_date: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -470,6 +485,11 @@ async def admin_create_user(
         email=user_data.email,
         brc=user_data.brc,
         district=user_data.district,
+        mobile=user_data.mobile,
+        aadhaar=user_data.aadhaar,
+        station_id=user_data.station_id,
+        avatar=user_data.avatar,
+        profile_photo=user_data.profile_photo,
         joining_date=user_data.joining_date,
         is_active=True
     )
@@ -710,6 +730,7 @@ def get_range_dates(range_value: str, from_date: Optional[str], to_date: Optiona
     return start, today
 
 
+
 @api_router.get("/admin/users/{user_id}/analytics")
 async def admin_user_analytics(
     user_id: str,
@@ -774,17 +795,17 @@ async def admin_user_analytics(
         elif txn.get("type") == "debit":
             eod_deduction += amount
 
-    # Fallback: agar purane paid reports ka debit transaction nahi bana hai,
-    # to paid reports ke total_amount se EOD deduction niklega.
+    paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
+
+    # Fallback: purane paid reports me debit transaction missing ho sakta hai.
     if eod_deduction == 0:
-        paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
         eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in paid_reports)
 
     total_enrollment = sum(int(r.get("total_count", 0) or 0) for r in filtered_reports)
     work_commission = total_enrollment * 10
 
     total_days = max((end_date.date() - start_date.date()).days + 1, 1)
-    avg_enrollment_per_day = round(total_enrollment / total_days, 2)
+    avg_enrollment_per_day = round(total_enrollment / total_days)
 
     day_order = [
         (0, "Mon"),
@@ -800,10 +821,34 @@ async def admin_user_analytics(
         for _, day_name in day_order
     }
 
+    daily_report_map = {}
+
     for report in filtered_reports:
         report_date = parse_date_safe(report.get("report_date"))
         if not report_date:
             continue
+
+        date_str = report_date.strftime("%d/%m/%Y")
+        report_type = report.get("report_type")
+
+        if date_str not in daily_report_map:
+            daily_report_map[date_str] = {
+                "sort_date": report_date,
+                "report_date": date_str,
+                "uc_available": False,
+                "ecmp_available": False,
+                "uc_report_id": None,
+                "ecmp_report_id": None,
+                "total_enrollment": 0
+            }
+
+        daily_report_map[date_str]["total_enrollment"] += int(report.get("total_count", 0) or 0)
+        if report_type == "UC":
+            daily_report_map[date_str]["uc_available"] = True
+            daily_report_map[date_str]["uc_report_id"] = report.get("id")
+        elif report_type == "ECMP":
+            daily_report_map[date_str]["ecmp_available"] = True
+            daily_report_map[date_str]["ecmp_report_id"] = report.get("id")
 
         weekday = report_date.weekday()
         if weekday == 6:
@@ -825,8 +870,12 @@ async def admin_user_analytics(
         day_buckets[day_name]["total"] += new_count + mbu_count + bio_count + dem_count
 
     weekly_enrollment = [day_buckets[day_name] for _, day_name in day_order]
+    daily_reports = []
+    for item in sorted(daily_report_map.values(), key=lambda x: x["sort_date"], reverse=True):
+        item.pop("sort_date", None)
+        daily_reports.append(item)
 
-    monthly_target_value = int(os.getenv("MONTHLY_ENROLLMENT_TARGET", "1000"))
+    monthly_target_value = int(os.getenv("MONTHLY_ENROLLMENT_TARGET", "500"))
     target_completed = total_enrollment
     target_percentage = round((target_completed / monthly_target_value) * 100, 2) if monthly_target_value else 0
 
@@ -835,6 +884,11 @@ async def admin_user_analytics(
             "id": staff.get("id"),
             "staff_id": staff.get("staff_id"),
             "name": staff.get("name"),
+            "email": staff.get("email"),
+            "mobile": staff.get("mobile") or staff.get("mobile_no"),
+            "aadhaar": staff.get("aadhaar") or staff.get("aadhaar_no"),
+            "station_id": staff.get("station_id") or staff.get("stationId"),
+            "avatar": staff.get("avatar") or staff.get("photo") or staff.get("profile_photo"),
             "brc": staff.get("brc"),
             "district": staff.get("district"),
             "joining_date": staff.get("joining_date"),
@@ -853,6 +907,7 @@ async def admin_user_analytics(
             "total_enrollment": total_enrollment
         },
         "weekly_enrollment": weekly_enrollment,
+        "daily_reports": daily_reports,
         "monthly_target": {
             "target": monthly_target_value,
             "completed": target_completed,
@@ -860,6 +915,57 @@ async def admin_user_analytics(
             "percentage": target_percentage
         }
     }
+
+
+@api_router.get("/admin/reports/{report_id}/download")
+async def admin_download_report_summary(
+    report_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    report = await db.reports.find_one({"id": report_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    headers = [
+        "Report ID",
+        "Report Date",
+        "Report Type",
+        "Operator ID",
+        "Station ID",
+        "New Enrollment",
+        "MBU",
+        "Biometric Update",
+        "Demographic Update",
+        "Total Enrollment",
+        "Total Amount",
+        "Payment Status",
+    ]
+
+    row = [
+        report.get("id", ""),
+        report.get("report_date", ""),
+        report.get("report_type", ""),
+        report.get("operator_id", ""),
+        report.get("station_id", ""),
+        str(report.get("new_enrollment_count", 0) or 0),
+        str(report.get("mandatory_bio_count", 0) or 0),
+        str(report.get("biometric_update_count", 0) or 0),
+        str(report.get("demographic_update_count", 0) or 0),
+        str(report.get("total_count", 0) or 0),
+        str(report.get("total_amount", 0) or 0),
+        report.get("payment_status", ""),
+    ]
+
+    csv_content = ",".join(headers) + "\n" + ",".join([f'"{str(value).replace(chr(34), chr(34)+chr(34))}"' for value in row]) + "\n"
+    filename = f"{report.get('report_type', 'report')}-{report.get('report_date', '').replace('/', '-')}.csv"
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 # ==================== AUTH ROUTES ====================
 
@@ -876,6 +982,11 @@ async def register_user(user_data: UserCreate):
         email=user_data.email,
         brc=user_data.brc,
         district=user_data.district,
+        mobile=user_data.mobile,
+        aadhaar=user_data.aadhaar,
+        station_id=user_data.station_id,
+        avatar=user_data.avatar,
+        profile_photo=user_data.profile_photo,
         joining_date=user_data.joining_date
     )
 
