@@ -74,10 +74,6 @@ class User(BaseModel):
     email: Optional[EmailStr] = None
     brc: Optional[str] = None
     district: Optional[str] = None
-    mobile: Optional[str] = None
-    station_id: Optional[str] = None
-    operator_id: Optional[str] = None
-    aadhaar: Optional[str] = None
     joining_date: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_active: bool = True
@@ -90,10 +86,6 @@ class UserCreate(BaseModel):
     email: Optional[EmailStr] = None
     brc: Optional[str] = None
     district: Optional[str] = None
-    mobile: Optional[str] = None
-    station_id: Optional[str] = None
-    operator_id: Optional[str] = None
-    aadhaar: Optional[str] = None
     joining_date: Optional[str] = None
 
 
@@ -178,17 +170,6 @@ class NonWorkingDayRequest(BaseModel):
 class AddFundsRequest(BaseModel):
     amount: float
     transaction_id: str = ""
-
-
-class UserProfileUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    brc: Optional[str] = None
-    district: Optional[str] = None
-    mobile: Optional[str] = None
-    station_id: Optional[str] = None
-    operator_id: Optional[str] = None
-    aadhaar: Optional[str] = None
 
 
 # ==================== AUTH UTILITIES ====================
@@ -460,10 +441,6 @@ class AdminUserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     brc: Optional[str] = None
     district: Optional[str] = None
-    mobile: Optional[str] = None
-    station_id: Optional[str] = None
-    operator_id: Optional[str] = None
-    aadhaar: Optional[str] = None
     joining_date: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -493,10 +470,6 @@ async def admin_create_user(
         email=user_data.email,
         brc=user_data.brc,
         district=user_data.district,
-        mobile=user_data.mobile,
-        station_id=user_data.station_id,
-        operator_id=user_data.operator_id,
-        aadhaar=user_data.aadhaar,
         joining_date=user_data.joining_date,
         is_active=True
     )
@@ -589,85 +562,58 @@ async def admin_delete_user(
         "message": "User deleted successfully"
     }
     
+
 @api_router.get("/admin/dashboard-stats")
 async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     require_admin(current_user)
 
-    total_staff = await db.users.count_documents({
-        "staff_id": {"$ne": "admin123"}
-    })
+    total_staff = await db.users.count_documents({"staff_id": {"$ne": "admin123"}})
 
     active_staff = await db.users.count_documents({
         "staff_id": {"$ne": "admin123"},
         "is_active": True
     })
 
-    def parse_date_safe(date_value):
-        if not date_value:
-            return None
-
-        if isinstance(date_value, datetime):
-            return date_value.replace(tzinfo=None)
-
-        date_text = str(date_value).strip()
-
-        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(date_text, fmt)
-            except ValueError:
-                pass
-
-        try:
-            return datetime.fromisoformat(date_text).replace(tzinfo=None)
-        except ValueError:
-            return None
-
-    # ===== EOD NOT UPLOADED: all active staff, joining date se today tak, koi day skip nahi =====
     all_users = await db.users.find(
         {"staff_id": {"$ne": "admin123"}, "is_active": True},
         {"_id": 0, "id": 1, "joining_date": 1}
     ).to_list(5000)
 
-    all_report_dates = await db.reports.find(
+    all_reports_for_missing = await db.reports.find(
         {},
         {"_id": 0, "user_id": 1, "report_date": 1, "report_type": 1}
     ).to_list(10000)
 
     reports_by_user = {}
 
-    for report in all_report_dates:
+    for report in all_reports_for_missing:
         user_id = report.get("user_id")
-        report_type = report.get("report_type")
-        report_date = report.get("report_date")
-
-        if not user_id or report_type not in ["ECMP", "UC"] or not report_date:
+        if not user_id:
             continue
 
         if user_id not in reports_by_user:
-            reports_by_user[user_id] = {
-                "ECMP": set(),
-                "UC": set()
-            }
+            reports_by_user[user_id] = {"ECMP": set(), "UC": set()}
 
-        parsed_report_date = parse_date_safe(report_date)
-        if not parsed_report_date:
-            continue
+        report_type = report.get("report_type")
+        report_date = report.get("report_date")
 
-        date_str = parsed_report_date.strftime("%d/%m/%Y")
-        reports_by_user[user_id][report_type].add(date_str)
+        if report_type in ["ECMP", "UC"] and report_date:
+            reports_by_user[user_id][report_type].add(report_date)
 
     eod_not_uploaded = 0
     today_date = datetime.now(timezone.utc).replace(tzinfo=None)
 
     for staff in all_users:
-        start_date = parse_date_safe(staff.get("joining_date"))
+        joining_date = staff.get("joining_date")
+        if not joining_date:
+            continue
 
+        start_date = parse_date_safe(joining_date)
         if not start_date:
             continue
 
         check_date = start_date
-
-        while check_date.date() <= today_date.date():
+        while check_date <= today_date:
             date_str = check_date.strftime("%d/%m/%Y")
 
             uploaded_ecmp = date_str in reports_by_user.get(staff["id"], {}).get("ECMP", set())
@@ -675,15 +621,18 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
 
             if not uploaded_ecmp:
                 eod_not_uploaded += 1
-
             if not uploaded_uc:
                 eod_not_uploaded += 1
 
             check_date += timedelta(days=1)
 
-    # ===== COLLECTION: report_date ke basis par total_amount ka sum =====
-    all_reports = await db.reports.find(
-        {},
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
+    last_day_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_week_start = today - timedelta(days=7)
+    last_month_start = today - timedelta(days=30)
+
+    paid_reports = await db.reports.find(
+        {"payment_status": "paid"},
         {"_id": 0, "report_date": 1, "total_amount": 1}
     ).to_list(10000)
 
@@ -691,25 +640,18 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     last_week_collection = 0.0
     last_month_collection = 0.0
 
-    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
-    week_start = today - timedelta(days=6)
-    month_start = today - timedelta(days=29)
-
-    for report in all_reports:
+    for report in paid_reports:
         report_date = parse_date_safe(report.get("report_date"))
         if not report_date:
             continue
 
         amount = float(report.get("total_amount", 0) or 0)
-        report_day = report_date.date()
 
-        if report_day == today:
+        if report_date >= last_day_start:
             last_day_collection += amount
-
-        if week_start <= report_day <= today:
+        if report_date >= last_week_start:
             last_week_collection += amount
-
-        if month_start <= report_day <= today:
+        if report_date >= last_month_start:
             last_month_collection += amount
 
     return {
@@ -721,6 +663,183 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
         "last_month_collection": round(last_month_collection, 2)
     }
 
+
+def parse_date_safe(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+
+    value = str(value).strip()
+    formats = ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            pass
+
+    try:
+        return datetime.fromisoformat(value).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def get_range_dates(range_value: str, from_date: Optional[str], to_date: Optional[str]):
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
+    today = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    if range_value == "custom":
+        start = parse_date_safe(from_date) if from_date else today - timedelta(days=5)
+        end = parse_date_safe(to_date) if to_date else today
+        if end:
+            end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return start, end
+
+    days_map = {
+        "1week": 6,
+        "2week": 12,
+        "3week": 18,
+        "4week": 24,
+        "5week": 30,
+    }
+    days = days_map.get(range_value, 6)
+    start = today - timedelta(days=days - 1)
+    start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start, today
+
+
+@api_router.get("/admin/users/{user_id}/analytics")
+async def admin_user_analytics(
+    user_id: str,
+    range: str = "1week",
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    category: str = "all",
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    staff = await db.users.find_one(
+        {"id": user_id},
+        {"_id": 0, "hashed_password": 0}
+    )
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff not found")
+
+    start_date, end_date = get_range_dates(range, from_date, to_date)
+
+    reports = await db.reports.find(
+        {"user_id": user_id},
+        {"_id": 0}
+    ).to_list(10000)
+
+    filtered_reports = []
+    for report in reports:
+        if category in ["ECMP", "UC"] and report.get("report_type") != category:
+            continue
+
+        report_date = parse_date_safe(report.get("report_date"))
+        if not report_date:
+            continue
+
+        if start_date <= report_date <= end_date:
+            filtered_reports.append(report)
+
+    wallet_transactions = await db.wallet_transactions.find(
+        {"user_id": user_id},
+        {"_id": 0, "type": 1, "amount": 1, "created_at": 1}
+    ).to_list(10000)
+
+    wallet_load = 0.0
+    for txn in wallet_transactions:
+        created_at = txn.get("created_at")
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at).replace(tzinfo=None)
+            except ValueError:
+                created_at = None
+        elif isinstance(created_at, datetime):
+            created_at = created_at.replace(tzinfo=None)
+
+        if created_at and start_date <= created_at <= end_date and txn.get("type") == "credit":
+            wallet_load += float(txn.get("amount", 0) or 0)
+
+    paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
+    eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in paid_reports)
+    work_commission = wallet_load - eod_deduction
+
+    total_enrollment = sum(int(r.get("total_count", 0) or 0) for r in filtered_reports)
+    total_days = max((end_date.date() - start_date.date()).days + 1, 1)
+    avg_enrollment_per_day = round(total_enrollment / total_days, 2)
+
+    weekly_enrollment = []
+    cursor = start_date
+    week_no = 1
+
+    while cursor <= end_date:
+        week_start = cursor
+        week_end = min(cursor + timedelta(days=5), end_date)
+
+        bucket_reports = []
+        for report in filtered_reports:
+            report_date = parse_date_safe(report.get("report_date"))
+            if report_date and week_start <= report_date <= week_end:
+                bucket_reports.append(report)
+
+        new_count = sum(int(r.get("new_enrollment_count", 0) or 0) for r in bucket_reports)
+        mbu_count = sum(int(r.get("mandatory_bio_count", 0) or 0) for r in bucket_reports)
+        bio_count = sum(int(r.get("biometric_update_count", 0) or 0) for r in bucket_reports)
+        dem_count = sum(int(r.get("demographic_update_count", 0) or 0) for r in bucket_reports)
+        total_count = new_count + mbu_count + bio_count + dem_count
+
+        weekly_enrollment.append({
+            "week": f"Week {week_no}",
+            "new": new_count,
+            "mbu": mbu_count,
+            "bio": bio_count,
+            "dem": dem_count,
+            "total": total_count
+        })
+
+        cursor = week_end + timedelta(days=1)
+        week_no += 1
+
+    monthly_target_value = int(os.getenv("MONTHLY_ENROLLMENT_TARGET", "1000"))
+    target_completed = total_enrollment
+    target_percentage = round((target_completed / monthly_target_value) * 100, 2) if monthly_target_value else 0
+
+    return {
+        "staff": {
+            "id": staff.get("id"),
+            "staff_id": staff.get("staff_id"),
+            "name": staff.get("name"),
+            "brc": staff.get("brc"),
+            "district": staff.get("district"),
+            "joining_date": staff.get("joining_date"),
+        },
+        "filters": {
+            "range": range,
+            "from_date": start_date.strftime("%Y-%m-%d"),
+            "to_date": end_date.strftime("%Y-%m-%d"),
+            "category": category
+        },
+        "summary": {
+            "wallet_load": round(wallet_load, 2),
+            "eod_deduction": round(eod_deduction, 2),
+            "work_commission": round(work_commission, 2),
+            "avg_enrollment_per_day": avg_enrollment_per_day,
+            "total_enrollment": total_enrollment
+        },
+        "weekly_enrollment": weekly_enrollment,
+        "monthly_target": {
+            "target": monthly_target_value,
+            "completed": target_completed,
+            "remaining": max(monthly_target_value - target_completed, 0),
+            "percentage": target_percentage
+        }
+    }
 
 # ==================== AUTH ROUTES ====================
 
@@ -737,10 +856,7 @@ async def register_user(user_data: UserCreate):
         email=user_data.email,
         brc=user_data.brc,
         district=user_data.district,
-        mobile=user_data.mobile,
-        station_id=user_data.station_id,
-        operator_id=user_data.operator_id,
-        aadhaar=user_data.aadhaar
+        joining_date=user_data.joining_date
     )
 
     user_doc = user.model_dump()
@@ -783,32 +899,6 @@ async def login(user_data: UserLogin):
 @api_router.get("/auth/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
-
-
-@api_router.put("/profile", response_model=User)
-async def update_profile(
-    data: UserProfileUpdate,
-    current_user: User = Depends(get_current_user)
-):
-    update_data = data.model_dump(exclude_none=True)
-
-    if not update_data:
-        return current_user
-
-    await db.users.update_one(
-        {"id": current_user.id},
-        {"$set": update_data}
-    )
-
-    updated_user = await db.users.find_one(
-        {"id": current_user.id},
-        {"_id": 0, "hashed_password": 0}
-    )
-
-    if isinstance(updated_user.get("created_at"), str):
-        updated_user["created_at"] = datetime.fromisoformat(updated_user["created_at"])
-
-    return User(**updated_user)
 
 
 # ==================== REPORT ROUTES ====================
@@ -992,19 +1082,21 @@ async def get_missing_eod(current_user: User = Depends(get_current_user)):
     while check_date <= today:
         date_str = check_date.strftime("%d/%m/%Y")
 
-        if date_str not in ecmp_dates:
-            missing_ecmp.append({
-                "date": date_str,
-                "type": "ECMP",
-                "status": "NOT-Uploaded"
-            })
+        # Sunday ignore
+        if check_date.weekday() != 6:
+            if date_str not in ecmp_dates:
+                missing_ecmp.append({
+                    "date": date_str,
+                    "type": "ECMP",
+                    "status": "NOT-Uploaded"
+                })
 
-        if date_str not in uc_dates:
-            missing_uc.append({
-                "date": date_str,
-                "type": "UC",
-                "status": "NOT-Uploaded"
-            })
+            if date_str not in uc_dates:
+                missing_uc.append({
+                    "date": date_str,
+                    "type": "UC",
+                    "status": "NOT-Uploaded"
+                })
 
         check_date = check_date + timedelta(days=1)
 
