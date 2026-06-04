@@ -994,6 +994,126 @@ async def admin_download_report_summary(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
+
+
+@api_router.get("/my-analytics")
+async def my_analytics(current_user: User = Depends(get_current_user)):
+    today = datetime.now(timezone.utc).replace(tzinfo=None)
+    end_date = today.replace(hour=23, minute=59, second=59, microsecond=999999)
+    start_date = (end_date - timedelta(days=5)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    reports = await db.reports.find(
+        {
+            "user_id": current_user.id,
+            "payment_status": "paid"
+        },
+        {"_id": 0}
+    ).to_list(10000)
+
+    filtered_reports = []
+    for report in reports:
+        report_date = parse_date_safe(report.get("report_date"))
+        if not report_date:
+            continue
+
+        if start_date <= report_date <= end_date:
+            filtered_reports.append(report)
+
+    wallet_transactions = await db.wallet_transactions.find(
+        {"user_id": current_user.id},
+        {"_id": 0, "type": 1, "amount": 1, "created_at": 1}
+    ).to_list(10000)
+
+    wallet_load = 0.0
+    eod_deduction = 0.0
+
+    for txn in wallet_transactions:
+        created_at = txn.get("created_at")
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at).replace(tzinfo=None)
+            except ValueError:
+                created_at = None
+        elif isinstance(created_at, datetime):
+            created_at = created_at.replace(tzinfo=None)
+
+        if not created_at or not (start_date <= created_at <= end_date):
+            continue
+
+        amount = float(txn.get("amount", 0) or 0)
+        if txn.get("type") == "credit":
+            wallet_load += amount
+        elif txn.get("type") == "debit":
+            eod_deduction += amount
+
+    if eod_deduction == 0:
+        eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in filtered_reports)
+
+    total_enrollment = sum(int(r.get("total_count", 0) or 0) for r in filtered_reports)
+    work_commission = total_enrollment * 10
+    total_days = max((end_date.date() - start_date.date()).days + 1, 1)
+    avg_enrollment_per_day = round(total_enrollment / total_days)
+
+    day_order = [
+        (0, "Mon"),
+        (1, "Tue"),
+        (2, "Wed"),
+        (3, "Thu"),
+        (4, "Fri"),
+        (5, "Sat"),
+    ]
+
+    day_buckets = {
+        day_name: {"day": day_name, "new": 0, "mbu": 0, "bio": 0, "dem": 0, "total": 0}
+        for _, day_name in day_order
+    }
+
+    for report in filtered_reports:
+        report_date = parse_date_safe(report.get("report_date"))
+        if not report_date:
+            continue
+
+        weekday = report_date.weekday()
+        if weekday == 6:
+            continue
+
+        day_name = dict(day_order).get(weekday)
+        if not day_name:
+            continue
+
+        new_count = int(report.get("new_enrollment_count", 0) or 0)
+        mbu_count = int(report.get("mandatory_bio_count", 0) or 0)
+        bio_count = int(report.get("biometric_update_count", 0) or 0)
+        dem_count = int(report.get("demographic_update_count", 0) or 0)
+
+        day_buckets[day_name]["new"] += new_count
+        day_buckets[day_name]["mbu"] += mbu_count
+        day_buckets[day_name]["bio"] += bio_count
+        day_buckets[day_name]["dem"] += dem_count
+        day_buckets[day_name]["total"] += new_count + mbu_count + bio_count + dem_count
+
+    monthly_target_value = int(os.getenv("MONTHLY_ENROLLMENT_TARGET", "500"))
+    target_completed = total_enrollment
+    target_percentage = round((target_completed / monthly_target_value) * 100, 2) if monthly_target_value else 0
+
+    return {
+        "summary": {
+            "wallet_load": round(wallet_load, 2),
+            "eod_deduction": round(eod_deduction, 2),
+            "work_commission": round(work_commission, 2),
+            "avg_enrollment_per_day": avg_enrollment_per_day,
+            "total_enrollment": total_enrollment
+        },
+        "weekly_enrollment": [day_buckets[day_name] for _, day_name in day_order],
+        "monthly_target": {
+            "target": monthly_target_value,
+            "completed": target_completed,
+            "remaining": max(monthly_target_value - target_completed, 0),
+            "percentage": target_percentage
+        }
+    }
+
+
 # ==================== AUTH ROUTES ====================
 
 @api_router.post("/auth/register", response_model=User)
@@ -1491,7 +1611,19 @@ async def add_funds(
     }
 
 
+
 # ==================== REQUEST ROUTES ====================
+
+def _safe_filename(filename: str) -> str:
+    if not filename:
+        return "attachment"
+    safe = "".join(ch for ch in filename if ch.isalnum() or ch in (" ", ".", "_", "-")).strip()
+    return safe or "attachment"
+
+
+class ApproveRequest(BaseModel):
+    amount: float
+
 
 @api_router.post("/requests/submit")
 async def submit_request(
@@ -1500,28 +1632,49 @@ async def submit_request(
     file: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user)
 ):
+    request_id = str(uuid.uuid4())
     file_path = None
+    file_name = None
+    file_content_type = None
 
     if file:
-        await file.read()
-        file_path = f"uploads/{current_user.id}/{file.filename}"
+        file_name = _safe_filename(file.filename)
+        file_content_type = file.content_type or "application/octet-stream"
 
-    request_obj = NonWorkingDayRequest(
-        user_id=current_user.id,
-        date=date,
-        reason=reason,
-        file_path=file_path
-    )
+        upload_dir = ROOT_DIR / "uploads" / "requests" / current_user.id
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-    request_doc = request_obj.model_dump()
-    request_doc["created_at"] = request_doc["created_at"].isoformat()
+        stored_name = f"{request_id}_{file_name}"
+        saved_path = upload_dir / stored_name
+
+        content = await file.read()
+        with open(saved_path, "wb") as f:
+            f.write(content)
+
+        file_path = str(saved_path)
+
+    request_doc = {
+        "id": request_id,
+        "user_id": current_user.id,
+        "staff_id": current_user.staff_id,
+        "staff_name": current_user.name,
+        "date": date,
+        "reason": reason,
+        "file_path": file_path,
+        "file_name": file_name,
+        "file_content_type": file_content_type,
+        "status": "pending",
+        "approved_amount": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
 
     await db.requests.insert_one(request_doc)
 
     return {
         "success": True,
         "message": "Request submitted successfully",
-        "request": request_obj
+        "request": {k: v for k, v in request_doc.items() if k != "_id"}
     }
 
 
@@ -1532,11 +1685,156 @@ async def get_requests(current_user: User = Depends(get_current_user)):
         {"_id": 0}
     ).sort("created_at", -1).to_list(100)
 
+    return requests
+
+
+@api_router.get("/admin/requests")
+async def admin_get_requests(current_user: User = Depends(get_current_user)):
+    require_admin(current_user)
+
+    requests = await db.requests.find(
+        {},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+
     for req in requests:
-        if isinstance(req.get("created_at"), str):
-            req["created_at"] = datetime.fromisoformat(req["created_at"])
+        user = await db.users.find_one(
+            {"id": req.get("user_id")},
+            {"_id": 0, "name": 1, "staff_id": 1, "email": 1, "brc": 1, "district": 1}
+        )
+
+        req["staff_name"] = req.get("staff_name") or (user.get("name") if user else "-")
+        req["staff_id"] = req.get("staff_id") or (user.get("staff_id") if user else "-")
+        req["email"] = user.get("email") if user else "-"
+        req["brc"] = user.get("brc") if user else "-"
+        req["district"] = user.get("district") if user else "-"
+        req["has_file"] = bool(req.get("file_path"))
 
     return requests
+
+
+@api_router.get("/admin/requests/{request_id}")
+async def admin_get_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    request_data = await db.requests.find_one(
+        {"id": request_id},
+        {"_id": 0}
+    )
+
+    if not request_data:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    user = await db.users.find_one(
+        {"id": request_data.get("user_id")},
+        {"_id": 0, "hashed_password": 0}
+    )
+
+    request_data["user"] = user or {}
+    request_data["has_file"] = bool(request_data.get("file_path"))
+
+    return request_data
+
+
+@api_router.get("/admin/requests/{request_id}/download")
+async def admin_download_request_file(
+    request_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    request_data = await db.requests.find_one(
+        {"id": request_id},
+        {"_id": 0}
+    )
+
+    if not request_data:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    file_path = request_data.get("file_path")
+    if not file_path:
+        raise HTTPException(status_code=404, detail="No file attached with this request")
+
+    path = Path(file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Attached file not found on server")
+
+    content = path.read_bytes()
+    filename = request_data.get("file_name") or path.name
+    content_type = request_data.get("file_content_type") or "application/octet-stream"
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@api_router.post("/admin/requests/{request_id}/approve")
+async def approve_request(
+    request_id: str,
+    data: ApproveRequest,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    if data.amount < 0:
+        raise HTTPException(status_code=400, detail="Amount cannot be negative")
+
+    request_data = await db.requests.find_one({"id": request_id}, {"_id": 0})
+    if not request_data:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    await db.requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": "approved",
+                "approved_amount": data.amount,
+                "approved_at": datetime.now(timezone.utc).isoformat(),
+                "approved_by": current_user.id,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+
+    return {
+        "success": True,
+        "message": "Request approved successfully",
+        "approved_amount": data.amount
+    }
+
+
+@api_router.post("/admin/requests/{request_id}/reject")
+async def reject_request(
+    request_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    request_data = await db.requests.find_one({"id": request_id}, {"_id": 0})
+    if not request_data:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    await db.requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": "rejected",
+                "rejected_at": datetime.now(timezone.utc).isoformat(),
+                "rejected_by": current_user.id,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+
+    return {
+        "success": True,
+        "message": "Request rejected successfully"
+    }
 
 
 # ==================== BASIC ROUTES ====================
