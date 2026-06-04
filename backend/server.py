@@ -182,6 +182,19 @@ class AddFundsRequest(BaseModel):
     transaction_id: str = ""
 
 
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    mobile: Optional[str] = None
+    station_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    aadhaar: Optional[str] = None
+    district: Optional[str] = None
+    brc: Optional[str] = None
+    avatar: Optional[str] = None
+    profile_photo: Optional[str] = None
+
+
 # ==================== AUTH UTILITIES ====================
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -600,7 +613,7 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
     ).to_list(5000)
 
     all_reports_for_missing = await db.reports.find(
-        {},
+        {"payment_status": "paid"},
         {"_id": 0, "user_id": 1, "report_date": 1, "report_type": 1}
     ).to_list(10000)
 
@@ -753,8 +766,9 @@ async def admin_user_analytics(
 
     reports = await db.reports.find(
         {
-            "user_id": user_id},
+            "user_id": user_id,
             "payment_status": "paid"
+        },
         {"_id": 0}
     ).to_list(10000)
 
@@ -930,6 +944,17 @@ async def admin_download_report_summary(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
+    # Original HTML is available only for reports uploaded after this update.
+    html_content = report.get("html_content")
+    if html_content:
+        filename = report.get("html_filename") or f"{report.get('report_type', 'report')}-{str(report.get('report_date', '')).replace('/', '-')}.html"
+        return Response(
+            content=html_content,
+            media_type="text/html; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    # Fallback for old reports where original HTML was not stored.
     headers = [
         "Report ID",
         "Report Date",
@@ -961,7 +986,7 @@ async def admin_download_report_summary(
     ]
 
     csv_content = ",".join(headers) + "\n" + ",".join([f'"{str(value).replace(chr(34), chr(34)+chr(34))}"' for value in row]) + "\n"
-    filename = f"{report.get('report_type', 'report')}-{report.get('report_date', '').replace('/', '-')}.csv"
+    filename = f"{report.get('report_type', 'report')}-{str(report.get('report_date', '')).replace('/', '-')}.csv"
 
     return Response(
         content=csv_content,
@@ -1032,6 +1057,50 @@ async def login(user_data: UserLogin):
 @api_router.get("/auth/me", response_model=User)
 async def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@api_router.get("/profile")
+async def get_profile(current_user: User = Depends(get_current_user)):
+    user_doc = await db.users.find_one(
+        {"id": current_user.id},
+        {"_id": 0, "hashed_password": 0}
+    )
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return user_doc
+
+
+@api_router.put("/profile")
+async def update_profile(
+    data: ProfileUpdate,
+    current_user: User = Depends(get_current_user)
+):
+    update_data = data.model_dump(exclude_none=True)
+
+    # Keep both keys so staff portal and admin analytics can read the same photo.
+    if "avatar" in update_data and update_data["avatar"]:
+        update_data["profile_photo"] = update_data["avatar"]
+    elif "profile_photo" in update_data and update_data["profile_photo"]:
+        update_data["avatar"] = update_data["profile_photo"]
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No profile data to update")
+
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": update_data}
+    )
+
+    updated_user = await db.users.find_one(
+        {"id": current_user.id},
+        {"_id": 0, "hashed_password": 0}
+    )
+
+    return {
+        "success": True,
+        "message": "Profile updated successfully",
+        "user": updated_user
+    }
 
 
 # ==================== REPORT ROUTES ====================
@@ -1117,6 +1186,11 @@ async def upload_report(
             if report_doc.get("paid_at"):
                 report_doc["paid_at"] = report_doc["paid_at"].isoformat()
 
+            # Store original extracted HTML for future admin downloads.
+            # Older reports uploaded before this change will not have html_content.
+            report_doc["html_content"] = html_content
+            report_doc["html_filename"] = f"{report_type}-{report_date.replace('/', '-')}.html" if report_date else f"{report_type}-report.html"
+
             await db.reports.insert_one(report_doc)
 
             message = f"{report_type} report uploaded and processed successfully"
@@ -1190,7 +1264,7 @@ async def get_missing_eod(current_user: User = Depends(get_current_user)):
             raise HTTPException(status_code=400, detail="Invalid joining date format")
 
     reports = await db.reports.find(
-        {"user_id": current_user.id},
+        {"user_id": current_user.id, "payment_status": "paid"},
         {"_id": 0, "report_date": 1, "report_type": 1}
     ).to_list(1000)
 
