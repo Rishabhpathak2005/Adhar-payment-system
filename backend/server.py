@@ -753,6 +753,8 @@ async def admin_user_analytics(
     ).to_list(10000)
 
     wallet_load = 0.0
+    eod_deduction = 0.0
+
     for txn in wallet_transactions:
         created_at = txn.get("created_at")
         if isinstance(created_at, str):
@@ -763,48 +765,66 @@ async def admin_user_analytics(
         elif isinstance(created_at, datetime):
             created_at = created_at.replace(tzinfo=None)
 
-        if created_at and start_date <= created_at <= end_date and txn.get("type") == "credit":
-            wallet_load += float(txn.get("amount", 0) or 0)
+        if not created_at or not (start_date <= created_at <= end_date):
+            continue
 
-    paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
-    eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in paid_reports)
-    work_commission = wallet_load - eod_deduction
+        amount = float(txn.get("amount", 0) or 0)
+        if txn.get("type") == "credit":
+            wallet_load += amount
+        elif txn.get("type") == "debit":
+            eod_deduction += amount
+
+    # Fallback: agar purane paid reports ka debit transaction nahi bana hai,
+    # to paid reports ke total_amount se EOD deduction niklega.
+    if eod_deduction == 0:
+        paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
+        eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in paid_reports)
 
     total_enrollment = sum(int(r.get("total_count", 0) or 0) for r in filtered_reports)
+    work_commission = total_enrollment * 10
+
     total_days = max((end_date.date() - start_date.date()).days + 1, 1)
     avg_enrollment_per_day = round(total_enrollment / total_days, 2)
 
-    weekly_enrollment = []
-    cursor = start_date
-    week_no = 1
+    day_order = [
+        (0, "Mon"),
+        (1, "Tue"),
+        (2, "Wed"),
+        (3, "Thu"),
+        (4, "Fri"),
+        (5, "Sat"),
+    ]
 
-    while cursor <= end_date:
-        week_start = cursor
-        week_end = min(cursor + timedelta(days=5), end_date)
+    day_buckets = {
+        day_name: {"day": day_name, "new": 0, "mbu": 0, "bio": 0, "dem": 0, "total": 0}
+        for _, day_name in day_order
+    }
 
-        bucket_reports = []
-        for report in filtered_reports:
-            report_date = parse_date_safe(report.get("report_date"))
-            if report_date and week_start <= report_date <= week_end:
-                bucket_reports.append(report)
+    for report in filtered_reports:
+        report_date = parse_date_safe(report.get("report_date"))
+        if not report_date:
+            continue
 
-        new_count = sum(int(r.get("new_enrollment_count", 0) or 0) for r in bucket_reports)
-        mbu_count = sum(int(r.get("mandatory_bio_count", 0) or 0) for r in bucket_reports)
-        bio_count = sum(int(r.get("biometric_update_count", 0) or 0) for r in bucket_reports)
-        dem_count = sum(int(r.get("demographic_update_count", 0) or 0) for r in bucket_reports)
-        total_count = new_count + mbu_count + bio_count + dem_count
+        weekday = report_date.weekday()
+        if weekday == 6:
+            continue
 
-        weekly_enrollment.append({
-            "week": f"Week {week_no}",
-            "new": new_count,
-            "mbu": mbu_count,
-            "bio": bio_count,
-            "dem": dem_count,
-            "total": total_count
-        })
+        day_name = dict(day_order).get(weekday)
+        if not day_name:
+            continue
 
-        cursor = week_end + timedelta(days=1)
-        week_no += 1
+        new_count = int(report.get("new_enrollment_count", 0) or 0)
+        mbu_count = int(report.get("mandatory_bio_count", 0) or 0)
+        bio_count = int(report.get("biometric_update_count", 0) or 0)
+        dem_count = int(report.get("demographic_update_count", 0) or 0)
+
+        day_buckets[day_name]["new"] += new_count
+        day_buckets[day_name]["mbu"] += mbu_count
+        day_buckets[day_name]["bio"] += bio_count
+        day_buckets[day_name]["dem"] += dem_count
+        day_buckets[day_name]["total"] += new_count + mbu_count + bio_count + dem_count
+
+    weekly_enrollment = [day_buckets[day_name] for _, day_name in day_order]
 
     monthly_target_value = int(os.getenv("MONTHLY_ENROLLMENT_TARGET", "1000"))
     target_completed = total_enrollment
