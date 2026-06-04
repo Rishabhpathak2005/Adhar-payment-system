@@ -752,7 +752,9 @@ async def admin_user_analytics(
     start_date, end_date = get_range_dates(range, from_date, to_date)
 
     reports = await db.reports.find(
-        {"user_id": user_id},
+        {
+            "user_id": user_id},
+            "payment_status": "paid"
         {"_id": 0}
     ).to_list(10000)
 
