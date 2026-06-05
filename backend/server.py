@@ -944,19 +944,19 @@ async def admin_download_report_summary(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    # Preferred download: original uploaded ZIP, available for reports uploaded after this update.
+    # Prefer original ZIP when available.
     zip_file_path = report.get("zip_file_path")
     if zip_file_path:
-        path = Path(zip_file_path)
-        if path.exists():
-            filename = report.get("zip_filename") or path.name
+        zip_path = Path(zip_file_path)
+        if zip_path.exists():
+            filename = report.get("zip_file_name") or zip_path.name
             return Response(
-                content=path.read_bytes(),
+                content=zip_path.read_bytes(),
                 media_type="application/zip",
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'}
             )
 
-    # Fallback: original extracted HTML if ZIP is not available.
+    # If ZIP is not available, try original HTML.
     html_content = report.get("html_content")
     if html_content:
         filename = report.get("html_filename") or f"{report.get('report_type', 'report')}-{str(report.get('report_date', '')).replace('/', '-')}.html"
@@ -966,7 +966,7 @@ async def admin_download_report_summary(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
 
-    # Final fallback for old reports where original ZIP/HTML was not stored.
+    # Fallback for old reports where original ZIP/HTML was not stored.
     headers = [
         "Report ID",
         "Report Date",
@@ -1008,7 +1008,7 @@ async def admin_download_report_summary(
 
 
 @api_router.get("/admin/reports/{report_id}/download-original")
-async def admin_download_original_zip(
+async def admin_download_original_report_zip(
     report_id: str,
     current_user: User = Depends(get_current_user)
 ):
@@ -1020,19 +1020,15 @@ async def admin_download_original_zip(
 
     zip_file_path = report.get("zip_file_path")
     if not zip_file_path:
-        raise HTTPException(
-            status_code=404,
-            detail="Original ZIP is not available for this report. It will be available only for new reports uploaded after ZIP storage update."
-        )
+        raise HTTPException(status_code=404, detail="Original ZIP not available for this report")
 
-    path = Path(zip_file_path)
-    if not path.exists():
+    zip_path = Path(zip_file_path)
+    if not zip_path.exists():
         raise HTTPException(status_code=404, detail="Original ZIP file not found on server")
 
-    filename = report.get("zip_filename") or path.name
-
+    filename = report.get("zip_file_name") or zip_path.name
     return Response(
-        content=path.read_bytes(),
+        content=zip_path.read_bytes(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
@@ -1348,29 +1344,24 @@ async def upload_report(
             if report_doc.get("paid_at"):
                 report_doc["paid_at"] = report_doc["paid_at"].isoformat()
 
+            # Store original uploaded ZIP permanently for admin download.
+            date_slug = report_date.replace("/", "-") if report_date else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            safe_staff_id = _safe_filename(current_user.staff_id)
+            safe_original_name = _safe_filename(file.filename or "report.zip")
+            zip_dir = ROOT_DIR / "uploads" / "reports" / safe_staff_id / report_type
+            zip_dir.mkdir(parents=True, exist_ok=True)
+            zip_filename = f"{report_type}-{date_slug}-{report.id}-{safe_original_name}"
+            saved_zip_path = zip_dir / zip_filename
+            with open(saved_zip_path, "wb") as saved_zip:
+                saved_zip.write(zip_content)
+
+            report_doc["zip_file_path"] = str(saved_zip_path)
+            report_doc["zip_file_name"] = zip_filename
+
             # Store original extracted HTML for future admin downloads.
             # Older reports uploaded before this change will not have html_content.
             report_doc["html_content"] = html_content
             report_doc["html_filename"] = f"{report_type}-{report_date.replace('/', '-')}.html" if report_date else f"{report_type}-report.html"
-
-            # Store original uploaded ZIP permanently for admin download.
-            # This works for reports uploaded after this update.
-            safe_staff_id = "".join(
-                ch for ch in current_user.staff_id if ch.isalnum() or ch in ("_", "-")
-            ) or current_user.id
-            safe_report_type = report_type if report_type in ["ECMP", "UC"] else "REPORT"
-            safe_report_date = (report_date or datetime.now(timezone.utc).strftime("%d-%m-%Y")).replace("/", "-")
-            original_zip_dir = ROOT_DIR / "uploads" / "reports" / safe_staff_id / safe_report_type
-            original_zip_dir.mkdir(parents=True, exist_ok=True)
-
-            original_zip_filename = f"{safe_report_type}-{safe_report_date}-{report.id}.zip"
-            original_zip_path = original_zip_dir / original_zip_filename
-
-            with open(original_zip_path, "wb") as original_zip_file:
-                original_zip_file.write(zip_content)
-
-            report_doc["zip_file_path"] = str(original_zip_path)
-            report_doc["zip_filename"] = original_zip_filename
 
             await db.reports.insert_one(report_doc)
 
@@ -1684,15 +1675,28 @@ def _safe_filename(filename: str) -> str:
 
 class ApproveRequest(BaseModel):
     amount: float
+    new_enrollment_count: int = 0
+    mandatory_bio_count: int = 0
+    demographic_update_count: int = 0
+    biometric_update_count: int = 0
+    remark: Optional[str] = None
+
+
+class RejectRequest(BaseModel):
+    remark: Optional[str] = None
 
 
 @api_router.post("/requests/submit")
 async def submit_request(
     date: str = Form(...),
+    report_type: str = Form(...),
     reason: str = Form(""),
     file: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_current_user)
 ):
+    if report_type not in ["ECMP", "UC"]:
+        raise HTTPException(status_code=400, detail="Report type must be ECMP or UC")
+
     request_id = str(uuid.uuid4())
     file_path = None
     file_name = None
@@ -1720,6 +1724,7 @@ async def submit_request(
         "staff_id": current_user.staff_id,
         "staff_name": current_user.name,
         "date": date,
+        "report_type": report_type,
         "reason": reason,
         "file_path": file_path,
         "file_name": file_name,
@@ -1849,29 +1854,143 @@ async def approve_request(
     if not request_data:
         raise HTTPException(status_code=404, detail="Request not found")
 
+    if request_data.get("status") == "approved":
+        raise HTTPException(status_code=400, detail="Request already approved")
+
+    user_id = request_data.get("user_id")
+    report_type = request_data.get("report_type")
+    if report_type not in ["ECMP", "UC"]:
+        raise HTTPException(status_code=400, detail="Invalid or missing report type in request")
+
+    report_date_dt = parse_date_safe(request_data.get("date"))
+    if not report_date_dt:
+        raise HTTPException(status_code=400, detail="Invalid request date")
+
+    report_date = report_date_dt.strftime("%d/%m/%Y")
+
+    new_count = max(int(data.new_enrollment_count or 0), 0)
+    mbu_count = max(int(data.mandatory_bio_count or 0), 0)
+    demo_count = max(int(data.demographic_update_count or 0), 0)
+    bio_count = max(int(data.biometric_update_count or 0), 0)
+    total_count = new_count + mbu_count + demo_count + bio_count
+    amount = float(data.amount or 0)
+
+    wallet = await db.wallets.find_one({"user_id": user_id})
+    if not wallet:
+        new_wallet = Wallet(user_id=user_id)
+        wallet_doc = new_wallet.model_dump()
+        wallet_doc["updated_at"] = wallet_doc["updated_at"].isoformat()
+        await db.wallets.insert_one(wallet_doc)
+        wallet = wallet_doc
+
+    current_balance = float(wallet.get("balance", 0.0) or 0.0)
+    if amount > current_balance:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient balance. Required: ₹{amount}, Available: ₹{current_balance}"
+        )
+
+    new_balance = current_balance - amount
+    now = datetime.now(timezone.utc)
+    payment_id = str(uuid.uuid4())
+
+    await db.wallets.update_one(
+        {"user_id": user_id},
+        {"$set": {"balance": new_balance, "updated_at": now.isoformat()}}
+    )
+
+    transaction = WalletTransaction(
+        user_id=user_id,
+        type="debit",
+        amount=amount,
+        description=f"Admin approved {report_type} EOD request - {report_date}",
+        balance_after=new_balance,
+        status="completed"
+    )
+    txn_doc = transaction.model_dump()
+    txn_doc["created_at"] = txn_doc["created_at"].isoformat()
+    await db.wallet_transactions.insert_one(txn_doc)
+
+    report_update = {
+        "user_id": user_id,
+        "date": now.strftime("%d/%m/%Y"),
+        "report_date": report_date,
+        "report_type": report_type,
+        "operator_id": "",
+        "registrar": "",
+        "enrolment_agency": "",
+        "station_id": "",
+        "new_enrollment_count": new_count,
+        "mandatory_bio_count": mbu_count,
+        "demographic_update_count": demo_count,
+        "biometric_update_count": bio_count,
+        "total_count": total_count,
+        "new_enrollment_amount": 0.0,
+        "mandatory_bio_amount": 0.0,
+        "demographic_update_amount": 0.0,
+        "biometric_update_amount": 0.0,
+        "total_amount": amount,
+        "records": [],
+        "serial_validation": {},
+        "payment_status": "paid",
+        "payment_id": payment_id,
+        "paid_at": now.isoformat(),
+        "uploaded_at": now.isoformat(),
+        "status": "uploaded",
+        "source": "admin_eod_request",
+        "request_id": request_id,
+        "admin_remark": data.remark or ""
+    }
+
+    if request_data.get("file_path"):
+        report_update["zip_file_path"] = request_data.get("file_path")
+        report_update["zip_file_name"] = request_data.get("file_name") or Path(request_data.get("file_path")).name
+
+    existing_report = await db.reports.find_one({
+        "user_id": user_id,
+        "report_date": report_date,
+        "report_type": report_type
+    })
+
+    if existing_report:
+        await db.reports.update_one(
+            {"id": existing_report.get("id")},
+            {"$set": report_update}
+        )
+        report_id = existing_report.get("id")
+    else:
+        report_id = str(uuid.uuid4())
+        report_update["id"] = report_id
+        await db.reports.insert_one(report_update)
+
     await db.requests.update_one(
         {"id": request_id},
         {
             "$set": {
                 "status": "approved",
-                "approved_amount": data.amount,
-                "approved_at": datetime.now(timezone.utc).isoformat(),
+                "approved_amount": amount,
+                "approved_at": now.isoformat(),
                 "approved_by": current_user.id,
-                "updated_at": datetime.now(timezone.utc).isoformat()
+                "remark": data.remark or "",
+                "report_id": report_id,
+                "updated_at": now.isoformat()
             }
         }
     )
 
     return {
         "success": True,
-        "message": "Request approved successfully",
-        "approved_amount": data.amount
+        "message": "Request approved, wallet debited and EOD report updated",
+        "approved_amount": amount,
+        "new_balance": new_balance,
+        "report_id": report_id,
+        "total_count": total_count
     }
-
 
 @api_router.post("/admin/requests/{request_id}/reject")
 async def reject_request(
     request_id: str,
+    data: RejectRequest = RejectRequest(),
     current_user: User = Depends(get_current_user)
 ):
     require_admin(current_user)
@@ -1887,6 +2006,7 @@ async def reject_request(
                 "status": "rejected",
                 "rejected_at": datetime.now(timezone.utc).isoformat(),
                 "rejected_by": current_user.id,
+                "remark": data.remark or "",
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
         }
@@ -1896,7 +2016,6 @@ async def reject_request(
         "success": True,
         "message": "Request rejected successfully"
     }
-
 
 # ==================== BASIC ROUTES ====================
 
