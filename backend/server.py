@@ -944,7 +944,19 @@ async def admin_download_report_summary(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    # Original HTML is available only for reports uploaded after this update.
+    # Preferred download: original uploaded ZIP, available for reports uploaded after this update.
+    zip_file_path = report.get("zip_file_path")
+    if zip_file_path:
+        path = Path(zip_file_path)
+        if path.exists():
+            filename = report.get("zip_filename") or path.name
+            return Response(
+                content=path.read_bytes(),
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+            )
+
+    # Fallback: original extracted HTML if ZIP is not available.
     html_content = report.get("html_content")
     if html_content:
         filename = report.get("html_filename") or f"{report.get('report_type', 'report')}-{str(report.get('report_date', '')).replace('/', '-')}.html"
@@ -954,7 +966,7 @@ async def admin_download_report_summary(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'}
         )
 
-    # Fallback for old reports where original HTML was not stored.
+    # Final fallback for old reports where original ZIP/HTML was not stored.
     headers = [
         "Report ID",
         "Report Date",
@@ -994,6 +1006,36 @@ async def admin_download_report_summary(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
+
+@api_router.get("/admin/reports/{report_id}/download-original")
+async def admin_download_original_zip(
+    report_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    require_admin(current_user)
+
+    report = await db.reports.find_one({"id": report_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    zip_file_path = report.get("zip_file_path")
+    if not zip_file_path:
+        raise HTTPException(
+            status_code=404,
+            detail="Original ZIP is not available for this report. It will be available only for new reports uploaded after ZIP storage update."
+        )
+
+    path = Path(zip_file_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Original ZIP file not found on server")
+
+    filename = report.get("zip_filename") or path.name
+
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 @api_router.get("/my-analytics")
@@ -1310,6 +1352,25 @@ async def upload_report(
             # Older reports uploaded before this change will not have html_content.
             report_doc["html_content"] = html_content
             report_doc["html_filename"] = f"{report_type}-{report_date.replace('/', '-')}.html" if report_date else f"{report_type}-report.html"
+
+            # Store original uploaded ZIP permanently for admin download.
+            # This works for reports uploaded after this update.
+            safe_staff_id = "".join(
+                ch for ch in current_user.staff_id if ch.isalnum() or ch in ("_", "-")
+            ) or current_user.id
+            safe_report_type = report_type if report_type in ["ECMP", "UC"] else "REPORT"
+            safe_report_date = (report_date or datetime.now(timezone.utc).strftime("%d-%m-%Y")).replace("/", "-")
+            original_zip_dir = ROOT_DIR / "uploads" / "reports" / safe_staff_id / safe_report_type
+            original_zip_dir.mkdir(parents=True, exist_ok=True)
+
+            original_zip_filename = f"{safe_report_type}-{safe_report_date}-{report.id}.zip"
+            original_zip_path = original_zip_dir / original_zip_filename
+
+            with open(original_zip_path, "wb") as original_zip_file:
+                original_zip_file.write(zip_content)
+
+            report_doc["zip_file_path"] = str(original_zip_path)
+            report_doc["zip_filename"] = original_zip_filename
 
             await db.reports.insert_one(report_doc)
 
