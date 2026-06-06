@@ -726,8 +726,19 @@ def get_range_dates(range_value: str, from_date: Optional[str], to_date: Optiona
     if range_value == "custom":
         start = parse_date_safe(from_date) if from_date else today - timedelta(days=5)
         end = parse_date_safe(to_date) if to_date else today
-        if end:
-            end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        if not start or not end:
+            raise HTTPException(status_code=400, detail="Invalid date range")
+
+        start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        if end.date() < start.date():
+            raise HTTPException(status_code=400, detail="To date cannot be before From date")
+
+        if (end.date() - start.date()).days > 30:
+            raise HTTPException(status_code=400, detail="Maximum 30 days date range allowed")
+
         return start, end
 
     days_map = {
