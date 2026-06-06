@@ -747,7 +747,7 @@ def get_range_dates(range_value: str, from_date: Optional[str], to_date: Optiona
 @api_router.get("/admin/users/{user_id}/analytics")
 async def admin_user_analytics(
     user_id: str,
-    range: str = "1week",
+    range: str = "custom",
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     category: str = "all",
@@ -764,6 +764,16 @@ async def admin_user_analytics(
 
     start_date, end_date = get_range_dates(range, from_date, to_date)
 
+    # Joining date se pehle graph/analytics candle nahi banega.
+    joining_dt = parse_date_safe(staff.get("joining_date"))
+    if joining_dt and joining_dt > start_date:
+        start_date = joining_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if start_date > end_date:
+        start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    selected_category = (category or "all").upper()
+
     reports = await db.reports.find(
         {
             "user_id": user_id,
@@ -774,7 +784,8 @@ async def admin_user_analytics(
 
     filtered_reports = []
     for report in reports:
-        if category in ["ECMP", "UC"] and report.get("report_type") != category:
+        report_type = str(report.get("report_type", "")).upper()
+        if selected_category in ["ECMP", "UC"] and report_type != selected_category:
             continue
 
         report_date = parse_date_safe(report.get("report_date"))
@@ -811,11 +822,9 @@ async def admin_user_analytics(
         elif txn.get("type") == "debit":
             eod_deduction += amount
 
-    paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
-
     # Fallback: purane paid reports me debit transaction missing ho sakta hai.
     if eod_deduction == 0:
-        eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in paid_reports)
+        eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in filtered_reports)
 
     total_enrollment = sum(int(r.get("total_count", 0) or 0) for r in filtered_reports)
     work_commission = total_enrollment * 10
@@ -823,19 +832,25 @@ async def admin_user_analytics(
     total_days = max((end_date.date() - start_date.date()).days + 1, 1)
     avg_enrollment_per_day = round(total_enrollment / total_days)
 
-    day_order = [
-        (0, "Mon"),
-        (1, "Tue"),
-        (2, "Wed"),
-        (3, "Thu"),
-        (4, "Fri"),
-        (5, "Sat"),
-    ]
+    # Date-wise buckets: candle har date ke liye banega, joining date se pehle nahi.
+    daily_chart_map = {}
+    check_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    day_buckets = {
-        day_name: {"day": day_name, "new": 0, "mbu": 0, "bio": 0, "dem": 0, "total": 0}
-        for _, day_name in day_order
-    }
+    while check_date <= end_day:
+        date_key = check_date.strftime("%d/%m/%Y")
+        label = check_date.strftime("%b") if check_date.day == 1 else check_date.strftime("%d")
+        daily_chart_map[date_key] = {
+            "date": date_key,
+            "label": label,
+            "day": check_date.strftime("%a"),
+            "new": 0,
+            "mbu": 0,
+            "bio": 0,
+            "dem": 0,
+            "total": 0,
+        }
+        check_date += timedelta(days=1)
 
     daily_report_map = {}
 
@@ -845,7 +860,20 @@ async def admin_user_analytics(
             continue
 
         date_str = report_date.strftime("%d/%m/%Y")
-        report_type = report.get("report_type")
+        report_type = str(report.get("report_type", "")).upper()
+
+        new_count = int(report.get("new_enrollment_count", 0) or 0)
+        mbu_count = int(report.get("mandatory_bio_count", 0) or 0)
+        bio_count = int(report.get("biometric_update_count", 0) or 0)
+        dem_count = int(report.get("demographic_update_count", 0) or 0)
+        report_total = int(report.get("total_count", 0) or 0) or (new_count + mbu_count + bio_count + dem_count)
+
+        if date_str in daily_chart_map:
+            daily_chart_map[date_str]["new"] += new_count
+            daily_chart_map[date_str]["mbu"] += mbu_count
+            daily_chart_map[date_str]["bio"] += bio_count
+            daily_chart_map[date_str]["dem"] += dem_count
+            daily_chart_map[date_str]["total"] += report_total
 
         if date_str not in daily_report_map:
             daily_report_map[date_str] = {
@@ -858,7 +886,7 @@ async def admin_user_analytics(
                 "total_enrollment": 0
             }
 
-        daily_report_map[date_str]["total_enrollment"] += int(report.get("total_count", 0) or 0)
+        daily_report_map[date_str]["total_enrollment"] += report_total
         if report_type == "UC":
             daily_report_map[date_str]["uc_available"] = True
             daily_report_map[date_str]["uc_report_id"] = report.get("id")
@@ -866,26 +894,8 @@ async def admin_user_analytics(
             daily_report_map[date_str]["ecmp_available"] = True
             daily_report_map[date_str]["ecmp_report_id"] = report.get("id")
 
-        weekday = report_date.weekday()
-        if weekday == 6:
-            continue
+    daily_chart = list(daily_chart_map.values())
 
-        day_name = dict(day_order).get(weekday)
-        if not day_name:
-            continue
-
-        new_count = int(report.get("new_enrollment_count", 0) or 0)
-        mbu_count = int(report.get("mandatory_bio_count", 0) or 0)
-        bio_count = int(report.get("biometric_update_count", 0) or 0)
-        dem_count = int(report.get("demographic_update_count", 0) or 0)
-
-        day_buckets[day_name]["new"] += new_count
-        day_buckets[day_name]["mbu"] += mbu_count
-        day_buckets[day_name]["bio"] += bio_count
-        day_buckets[day_name]["dem"] += dem_count
-        day_buckets[day_name]["total"] += new_count + mbu_count + bio_count + dem_count
-
-    weekly_enrollment = [day_buckets[day_name] for _, day_name in day_order]
     daily_reports = []
     for item in sorted(daily_report_map.values(), key=lambda x: x["sort_date"], reverse=True):
         item.pop("sort_date", None)
@@ -922,7 +932,9 @@ async def admin_user_analytics(
             "avg_enrollment_per_day": avg_enrollment_per_day,
             "total_enrollment": total_enrollment
         },
-        "weekly_enrollment": weekly_enrollment,
+        "daily_chart": daily_chart,
+        # Backward-compatible key for frontend.
+        "weekly_enrollment": daily_chart,
         "daily_reports": daily_reports,
         "monthly_target": {
             "target": monthly_target_value,
