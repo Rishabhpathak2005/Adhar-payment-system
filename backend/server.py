@@ -659,10 +659,21 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
 
             check_date += timedelta(days=1)
 
-    today = datetime.now(timezone.utc).replace(tzinfo=None)
-    last_day_start = today.replace(hour=0, minute=0, second=0, microsecond=0)
-    last_week_start = today - timedelta(days=7)
-    last_month_start = today - timedelta(days=30)
+    # Collection logic uses India calendar dates.
+    # Last Day = Current date - 1 day.
+    # Last Week = Current date - 7 days through Current date - 1 day.
+    # Last Month = Previous month 1st date through Current month 1st date - 1 day.
+    ist_now = datetime.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+    today_day = ist_now.date()
+    last_day = today_day - timedelta(days=1)
+    last_week_start = today_day - timedelta(days=7)
+    last_week_end = last_day
+
+    current_month_first = today_day.replace(day=1)
+    previous_month_last = current_month_first - timedelta(days=1)
+    previous_month_first = previous_month_last.replace(day=1)
+    last_month_start = previous_month_first
+    last_month_end = previous_month_last
 
     paid_reports = await db.reports.find(
         {"payment_status": "paid"},
@@ -678,13 +689,14 @@ async def admin_dashboard_stats(current_user: User = Depends(get_current_user)):
         if not report_date:
             continue
 
+        report_day = report_date.date()
         amount = float(report.get("total_amount", 0) or 0)
 
-        if report_date >= last_day_start:
+        if report_day == last_day:
             last_day_collection += amount
-        if report_date >= last_week_start:
+        if last_week_start <= report_day <= last_week_end:
             last_week_collection += amount
-        if report_date >= last_month_start:
+        if last_month_start <= report_day <= last_month_end:
             last_month_collection += amount
 
     return {
@@ -726,19 +738,8 @@ def get_range_dates(range_value: str, from_date: Optional[str], to_date: Optiona
     if range_value == "custom":
         start = parse_date_safe(from_date) if from_date else today - timedelta(days=5)
         end = parse_date_safe(to_date) if to_date else today
-
-        if not start or not end:
-            raise HTTPException(status_code=400, detail="Invalid date range")
-
-        start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-        end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-        if end.date() < start.date():
-            raise HTTPException(status_code=400, detail="To date cannot be before From date")
-
-        if (end.date() - start.date()).days > 30:
-            raise HTTPException(status_code=400, detail="Maximum 30 days date range allowed")
-
+        if end:
+            end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
         return start, end
 
     days_map = {
@@ -758,7 +759,7 @@ def get_range_dates(range_value: str, from_date: Optional[str], to_date: Optiona
 @api_router.get("/admin/users/{user_id}/analytics")
 async def admin_user_analytics(
     user_id: str,
-    range: str = "custom",
+    range: str = "1week",
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     category: str = "all",
@@ -775,36 +776,36 @@ async def admin_user_analytics(
 
     start_date, end_date = get_range_dates(range, from_date, to_date)
 
-    # Joining date se pehle graph/analytics candle nahi banega.
-    joining_dt = parse_date_safe(staff.get("joining_date"))
-    if joining_dt and joining_dt > start_date:
-        start_date = joining_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    joining_date = parse_date_safe(staff.get("joining_date"))
+    if joining_date and joining_date > start_date:
+        start_date = joining_date.replace(hour=0, minute=0, second=0, microsecond=0)
 
     if start_date > end_date:
-        start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        filtered_reports = []
+    else:
+        date_diff = (end_date.date() - start_date.date()).days
+        if date_diff > 30:
+            raise HTTPException(status_code=400, detail="Maximum 30 days date range allowed")
 
-    selected_category = (category or "all").upper()
+        reports = await db.reports.find(
+            {
+                "user_id": user_id,
+                "payment_status": "paid"
+            },
+            {"_id": 0}
+        ).to_list(10000)
 
-    reports = await db.reports.find(
-        {
-            "user_id": user_id,
-            "payment_status": "paid"
-        },
-        {"_id": 0}
-    ).to_list(10000)
+        filtered_reports = []
+        for report in reports:
+            if category in ["ECMP", "UC"] and report.get("report_type") != category:
+                continue
 
-    filtered_reports = []
-    for report in reports:
-        report_type = str(report.get("report_type", "")).upper()
-        if selected_category in ["ECMP", "UC"] and report_type != selected_category:
-            continue
+            report_date = parse_date_safe(report.get("report_date"))
+            if not report_date:
+                continue
 
-        report_date = parse_date_safe(report.get("report_date"))
-        if not report_date:
-            continue
-
-        if start_date <= report_date <= end_date:
-            filtered_reports.append(report)
+            if start_date <= report_date <= end_date:
+                filtered_reports.append(report)
 
     wallet_transactions = await db.wallet_transactions.find(
         {"user_id": user_id},
@@ -833,9 +834,10 @@ async def admin_user_analytics(
         elif txn.get("type") == "debit":
             eod_deduction += amount
 
-    # Fallback: purane paid reports me debit transaction missing ho sakta hai.
+    paid_reports = [r for r in filtered_reports if r.get("payment_status") == "paid"]
+
     if eod_deduction == 0:
-        eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in filtered_reports)
+        eod_deduction = sum(float(r.get("total_amount", 0) or 0) for r in paid_reports)
 
     total_enrollment = sum(int(r.get("total_count", 0) or 0) for r in filtered_reports)
     work_commission = total_enrollment * 10
@@ -843,25 +845,25 @@ async def admin_user_analytics(
     total_days = max((end_date.date() - start_date.date()).days + 1, 1)
     avg_enrollment_per_day = round(total_enrollment / total_days)
 
-    # Date-wise buckets: candle har date ke liye banega, joining date se pehle nahi.
     daily_chart_map = {}
-    check_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    end_day = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    while check_date <= end_day:
-        date_key = check_date.strftime("%d/%m/%Y")
-        label = check_date.strftime("%b") if check_date.day == 1 else check_date.strftime("%d")
-        daily_chart_map[date_key] = {
-            "date": date_key,
-            "label": label,
-            "day": check_date.strftime("%a"),
-            "new": 0,
-            "mbu": 0,
-            "bio": 0,
-            "dem": 0,
-            "total": 0,
-        }
-        check_date += timedelta(days=1)
+    if start_date <= end_date:
+        cursor = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        final_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        while cursor <= final_date:
+            label = cursor.strftime("%b") if cursor.day == 1 else cursor.strftime("%d")
+            date_str = cursor.strftime("%d/%m/%Y")
+            daily_chart_map[date_str] = {
+                "date": date_str,
+                "full_date": date_str,
+                "day_name": cursor.strftime("%a"),
+                "label": label,
+                "new": 0,
+                "mbu": 0,
+                "bio": 0,
+                "dem": 0,
+                "total": 0
+            }
+            cursor += timedelta(days=1)
 
     daily_report_map = {}
 
@@ -871,20 +873,7 @@ async def admin_user_analytics(
             continue
 
         date_str = report_date.strftime("%d/%m/%Y")
-        report_type = str(report.get("report_type", "")).upper()
-
-        new_count = int(report.get("new_enrollment_count", 0) or 0)
-        mbu_count = int(report.get("mandatory_bio_count", 0) or 0)
-        bio_count = int(report.get("biometric_update_count", 0) or 0)
-        dem_count = int(report.get("demographic_update_count", 0) or 0)
-        report_total = int(report.get("total_count", 0) or 0) or (new_count + mbu_count + bio_count + dem_count)
-
-        if date_str in daily_chart_map:
-            daily_chart_map[date_str]["new"] += new_count
-            daily_chart_map[date_str]["mbu"] += mbu_count
-            daily_chart_map[date_str]["bio"] += bio_count
-            daily_chart_map[date_str]["dem"] += dem_count
-            daily_chart_map[date_str]["total"] += report_total
+        report_type = report.get("report_type")
 
         if date_str not in daily_report_map:
             daily_report_map[date_str] = {
@@ -897,7 +886,7 @@ async def admin_user_analytics(
                 "total_enrollment": 0
             }
 
-        daily_report_map[date_str]["total_enrollment"] += report_total
+        daily_report_map[date_str]["total_enrollment"] += int(report.get("total_count", 0) or 0)
         if report_type == "UC":
             daily_report_map[date_str]["uc_available"] = True
             daily_report_map[date_str]["uc_report_id"] = report.get("id")
@@ -905,7 +894,19 @@ async def admin_user_analytics(
             daily_report_map[date_str]["ecmp_available"] = True
             daily_report_map[date_str]["ecmp_report_id"] = report.get("id")
 
-    daily_chart = list(daily_chart_map.values())
+        new_count = int(report.get("new_enrollment_count", 0) or 0)
+        mbu_count = int(report.get("mandatory_bio_count", 0) or 0)
+        bio_count = int(report.get("biometric_update_count", 0) or 0)
+        dem_count = int(report.get("demographic_update_count", 0) or 0)
+
+        if date_str in daily_chart_map:
+            daily_chart_map[date_str]["new"] += new_count
+            daily_chart_map[date_str]["mbu"] += mbu_count
+            daily_chart_map[date_str]["bio"] += bio_count
+            daily_chart_map[date_str]["dem"] += dem_count
+            daily_chart_map[date_str]["total"] += new_count + mbu_count + bio_count + dem_count
+
+    daily_chart_data = list(daily_chart_map.values())
 
     daily_reports = []
     for item in sorted(daily_report_map.values(), key=lambda x: x["sort_date"], reverse=True):
@@ -943,9 +944,8 @@ async def admin_user_analytics(
             "avg_enrollment_per_day": avg_enrollment_per_day,
             "total_enrollment": total_enrollment
         },
-        "daily_chart": daily_chart,
-        # Backward-compatible key for frontend.
-        "weekly_enrollment": daily_chart,
+        "weekly_enrollment": daily_chart_data,
+        "daily_chart_data": daily_chart_data,
         "daily_reports": daily_reports,
         "monthly_target": {
             "target": monthly_target_value,
@@ -954,7 +954,6 @@ async def admin_user_analytics(
             "percentage": target_percentage
         }
     }
-
 
 @api_router.get("/admin/reports/{report_id}/download")
 async def admin_download_report_summary(
